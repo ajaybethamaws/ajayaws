@@ -23,17 +23,49 @@ s3_config = Config(
 )
 s3_client = boto3.client('s3', region_name=REGION, config=s3_config)
 
-image_cache = {}
+# Global in-memory structured cache
+image_cache = {
+    'telugu': {'keys': [], 'last_updated': 0},
+    'english': {'keys': [], 'last_updated': 0}
+}
+CACHE_TTL_SECONDS = 600  # 10 minutes cache expiration
+
+def get_sorted_images(folder_prefix):
+    global image_cache
+    current_time = time.time()
+    cache_key = 'telugu' if folder_prefix == "telugu/" else 'english'
+    
+    # Refresh cache if empty or TTL expired
+    if not image_cache[cache_key]['keys'] or (current_time - image_cache[cache_key]['last_updated'] > CACHE_TTL_SECONDS):
+        logger.info(f"Cache expired or empty for {folder_prefix}. Fetching and sorting from S3...")
+        try:
+            resp = s3_client.list_objects_v2(Bucket=BUCKET_NAME, Prefix=folder_prefix, MaxKeys=1000)
+            contents = resp.get('Contents', [])
+            
+            # Filter and sort by LastModified (Newest First)
+            valid_images = [obj for obj in contents if obj['Key'].lower().endswith(('.jpg', '.jpeg'))]
+            valid_images.sort(key=lambda x: x['LastModified'], reverse=True)
+            
+            sorted_keys = [obj['Key'] for obj in valid_images]
+            
+            image_cache[cache_key] = {
+                'keys': sorted_keys,
+                'last_updated': current_time
+            }
+        except Exception as e:
+            logger.error(f"Error updating S3 asset cache: {str(e)}")
+            
+    return image_cache[cache_key]['keys']
 
 def lambda_handler(event, context):
+    global image_cache
+    
     # --- SECTION 0: WARMER LOGIC ---
-    # This detects the EventBridge poke and exits early to stay 'warm'
     if event.get('warmer'):
         logger.info("Warmer pulse received. Image cache is active.")
         return {'statusCode': 200, 'body': 'warmed'}
     # -------------------------------
 
-    global image_cache
     try:
         path = event.get('rawPath', event.get('path', '/'))
         clean_path = path.strip('/')
@@ -44,19 +76,36 @@ def lambda_handler(event, context):
         if clean_path in ["favicon.ico", "apple-touch-icon.png", "logo.png"]:
             return {'statusCode': 302, 'headers': {'Location': f"{S3_DIRECT_URL}/{clean_path}"}, 'body': ''}
 
-        query_params = event.get('queryStringParameters', {})
+        query_params = event.get('queryStringParameters', {}) or {}
+        
+        # Admin cache flush tool (ajaybetham.com/?refresh=true)
+        if query_params.get('refresh') == 'true':
+            image_cache = {'telugu': {'keys': [], 'last_updated': 0}, 'english': {'keys': [], 'last_updated': 0}}
+            logger.info("Cache manually cleared via query parameter.")
 
-        # 2. IMAGE ROTATION LOGIC
+        # 2. IMAGE ROTATION LOGIC (Sequential Newest to Oldest)
         if query_params and 't' in query_params:
-            if folder_prefix not in image_cache or not image_cache[folder_prefix]:
-                resp = s3_client.list_objects_v2(Bucket=BUCKET_NAME, Prefix=folder_prefix, MaxKeys=1000)
-                image_cache[folder_prefix] = [obj['Key'] for obj in resp.get('Contents', []) if obj['Key'].lower().endswith(('.jpg', '.jpeg'))]
+            images = get_sorted_images(folder_prefix)
+            if not images:
+                return {'statusCode': 404, 'body': 'No images found'}
             
-            selected = random.choice(image_cache[folder_prefix])
+            total_images = len(images)
+            
+            # Parse requested index from client; default to 0 (Latest)
+            try:
+                requested_idx = int(query_params.get('idx', 0))
+                # Loop back to 0 if we exceed total images
+                index = requested_idx % total_images
+            except ValueError:
+                index = 0
+
+            selected = images[index]
+            logger.info(f"Serving image index {index}/{total_images - 1}: {selected}")
+            
             return {
                 'statusCode': 302,
                 'headers': {
-                    'Location': f"{S3_DIRECT_URL}/{selected}?v=101",
+                    'Location': f"{S3_DIRECT_URL}/{selected}?v={int(time.time())}",
                     'Cache-Control': 'no-store, no-cache, must-revalidate',
                     'Access-Control-Allow-Origin': '*'
                 }, 'body': ''
@@ -64,12 +113,8 @@ def lambda_handler(event, context):
 
         # 3. UI CONSTRUCTION
         display_title = "Times of Refreshing"
-        
-        if folder_prefix not in image_cache or not image_cache[folder_prefix]:
-            resp = s3_client.list_objects_v2(Bucket=BUCKET_NAME, Prefix=folder_prefix, MaxKeys=100)
-            image_cache[folder_prefix] = [obj['Key'] for obj in resp.get('Contents', []) if obj['Key'].lower().endswith(('.jpg', '.jpeg'))]
-
-        social_img_path = f"{S3_DIRECT_URL}/{image_cache[folder_prefix][0]}" if image_cache[folder_prefix] else f"{S3_DIRECT_URL}/logo.png"
+        images = get_sorted_images(folder_prefix)
+        social_img_path = f"{S3_DIRECT_URL}/{images[0]}" if images else f"{S3_DIRECT_URL}/logo.png"
 
         h = f'<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">'
         h += f'<meta property="og:title" content="{display_title}"><meta property="og:image" content="{social_img_path}">'
@@ -83,15 +128,12 @@ def lambda_handler(event, context):
         h += '#rotator { max-width: 85vw; max-height: 55vh; border-radius: 20px; opacity: 0; transition: opacity 0.4s ease; pointer-events: none; }'
         h += '.guard { position: absolute; top: 0; left: 0; width: 100%; height: 100%; z-index: 10; border-radius: 40px; background-image: url("/logo.png"); background-repeat: no-repeat; background-position: center bottom 25px; background-size: 50px; opacity: 0.15; pointer-events: none; }' 
         h += '.loader { border: 4px solid rgba(255,255,255,0.1); border-top: 4px solid #38bdf8; border-radius: 50%; width: 40px; height: 40px; animation: spin 1s linear infinite; position: absolute; }'
-        
         h += '.icon-btn { position: fixed; top: 20px; background: rgba(255,255,255,0.1); padding: 10px; border-radius: 50%; border: 1px solid rgba(255,255,255,0.2); cursor: pointer; color: white; transition: 0.3s; z-index: 100; display: flex; align-items: center; justify-content: center; }'
         h += '.lang-btn { right: 20px; border-radius: 20px; padding: 8px 16px; text-decoration: none; font-size: 13px; font-weight: bold; width: auto; }'
         h += '.bell-btn { left: 20px; }'
-        
         h += '.modal { display: none; position: fixed; top: 75px; left: 20px; background: rgba(30, 41, 59, 0.95); backdrop-filter: blur(15px); padding: 20px; border-radius: 20px; border: 1px solid rgba(56, 189, 248, 0.5); z-index: 101; box-shadow: 0 20px 50px rgba(0,0,0,0.6); width: 260px; }'
         h += '.modal input { background: rgba(255,255,255,0.1); border: 1px solid rgba(255,255,255,0.2); color: white; padding: 12px; border-radius: 10px; width: 100%; box-sizing: border-box; margin-bottom: 12px; outline: none; font-size: 16px; }'
         h += '.modal button { background: #38bdf8; color: #0f172a; border: none; padding: 12px; width: 100%; border-radius: 10px; font-weight: bold; cursor: pointer; font-size: 16px; }'
-        
         h += '@keyframes spin { 100% { transform: rotate(360deg); } }'
         h += '.fab { position: fixed; bottom: 30px; width: 55px; height: 55px; background: rgba(255,255,255,0.1); border-radius: 50%; display: flex; justify-content: center; align-items: center; cursor: pointer; border: 1px solid rgba(255,255,255,0.2); transition: 0.3s; z-index: 20; }'
         h += '.share { left: 30px; } .refresh { right: 30px; } .fab:hover { transform: scale(1.1); background: rgba(255,255,255,0.2); }'
@@ -102,23 +144,29 @@ def lambda_handler(event, context):
         
         h += f'<a href="{toggle_link}" class="icon-btn lang-btn">{toggle_label}</a>'
         h += '<div class="icon-btn bell-btn" onclick="toggleM(event)"><svg width="20" height="20" fill="currentColor" viewBox="0 0 24 24"><path d="M12 22c1.1 0 2-.9 2-2h-4c0 1.1.89 2 2 2zm6-6v-5c0-3.07-1.64-5.64-4.5-6.32V4c0-.83-.67-1.5-1.5-1.5s-1.5 1.5-1.5 1.5v.68C7.63 5.36 6 7.92 6 11v5l-2 2v1h16v-1l-2-2z"/></svg></div>'
-
         h += '<div id="subM" class="modal" onclick="event.stopPropagation()"><p style="margin:0 0 10px 0; font-size:14px; color:#cbd5e1;">Receive daily verses:</p><input type="email" id="uE" placeholder="Enter email"><button id="sBtn" onclick="sub()">Be Refreshed</button></div>'
-
         h += '<div class="logo-cont"><img src="/logo.png" style="width:60px;"></div>'
         h += '<div class="glass" onclick="closeM()"><div class="guard"></div><div class="loader" id="ld"></div><img id="rotator" crossorigin="anonymous"></div>'
-        
         h += '<div class="fab share" onclick="sh()"><svg width="24" height="24" fill="white" viewBox="0 0 24 24"><path d="M18 16.08c-.76 0-1.44.3-1.96.77L8.91 12.7c.05-.23.09-.46.09-.7s-.04-.47-.09-.7l7.05-4.11c.54.5 1.25.81 2.04.81 1.66 0 3-1.34 3-3s-1.34-3-3-3-3 1.34-3 3c0 .24.04.47.09.7L8.04 9.81C7.5 9.31 6.79 9 6 9c-1.66 0-3 1.34-3 3s1.34 3 3 3c.79 0 1.5-.31 2.04-.81l7.12 4.16c-.05.21-.08.43-.08.65 0 1.61 1.31 2.92 2.92 2.92s2.92-1.31 2.92-2.92c0-1.61-1.31-2.92-2.92-2.92z"/></svg></div>'
         h += '<div class="fab refresh" onclick="load()"><svg width="24" height="24" fill="white" viewBox="0 0 24 24"><path d="M17.65 6.35C16.2 4.9 14.21 4 12 4c-4.42 0-7.99 3.58-7.99 8s3.57 8 7.99 8c3.73 0 6.84-2.55 7.73-6h-2.08c-.82 2.33-3.04 4-5.65 4-3.31 0-6-2.69-6-6s2.69-6 6-6c1.66 0 3.14.69 4.22 1.78L13 11h7V4l-2.35 2.35z"/></svg></div>'
         
+        # FIXED JAVASCRIPT: Tracks current index explicitly across DOM lifecycle
         h += '<script>const img=document.getElementById("rotator"),ld=document.getElementById("ld"),m=document.getElementById("subM");'
+        h += 'let currentIdx = 0;' 
         h += 'function toggleM(e){ e.stopPropagation(); m.style.display=(m.style.display==="block")?"none":"block"; }'
         h += 'function closeM(){ m.style.display="none"; }'
-        h += 'function load(){ ld.style.display="block"; img.style.opacity="0"; img.src = window.location.pathname + "?t=" + Date.now(); }'
+        h += 'function load(isRefresh = false){'
+        h += '  ld.style.display="block"; img.style.opacity="0";'
+        h += '  if(isRefresh){ currentIdx++; }'  # Advance index on manual user click
+        h += '  img.src = window.location.pathname + "?t=" + Date.now() + "&idx=" + currentIdx;'
+        h += '}'
         h += 'img.onload=()=>{ ld.style.display="none"; img.style.opacity="1"; };'
         h += 'async function sub(){ const e=document.getElementById("uE"),b=document.getElementById("sBtn"); if(!e.value.includes("@"))return alert("Valid email please!"); b.disabled=true; b.innerText="..."; try{ await fetch("' + SUBSCRIBER_URL + '",{method:"POST",mode:"no-cors",body:JSON.stringify({email:e.value.trim()})}); alert("Subscribed! Be Refreshed."); e.value=""; closeM(); }catch(err){ alert("Subscribed!"); closeM(); } b.disabled=false; b.innerText="Be Refreshed"; }'
         h += 'function sh(){ if(navigator.share)navigator.share({title:document.title,url:window.location.href}); else {navigator.clipboard.writeText(window.location.href);alert("Link copied!")}}'
-        h += 'document.addEventListener("contextmenu", e => e.preventDefault()); window.onload = load;'
+        h += 'document.addEventListener("contextmenu", e => e.preventDefault());'
+        h += 'window.onload = () => { load(false); };' # Initial load starts at index 0 (Newest)
+        # Remap the refresh button click to increment index cleanly
+        h += 'document.querySelector(".refresh").setAttribute("onclick", "load(true)");'
         h += '</script></body></html>'
 
         return {'statusCode': 200, 'headers': {'Content-Type': 'text/html'}, 'body': h}
