@@ -68,7 +68,8 @@ def lambda_handler(event, context):
         is_telugu = clean_path.lower() == "telugu"
         folder_prefix = "telugu/" if is_telugu else "english/"
 
-        if clean_path in ["favicon.ico", "apple-touch-icon.png", "logo.png"]:
+        # Whitelist both preview images in the root bucket layer pass-through pass
+        if clean_path in ["favicon.ico", "apple-touch-icon.png", "logo.png", "home-preview.jpg", "home-preview-telugu.jpg"]:
             return {'statusCode': 302, 'headers': {'Location': f"{S3_DIRECT_URL}/{clean_path}"}, 'body': ''}
 
         query_params = event.get('queryStringParameters', {}) or {}
@@ -86,9 +87,20 @@ def lambda_handler(event, context):
         display_title = "Times of Refreshing"
         images = get_sorted_images(folder_prefix)
         
-        if images:
-            meta_index = url_idx % len(images) if url_idx is not None else 0
+        # --- ROBUST IMAGE PREVIEW DISTRIBUTION TRACK ---
+        if url_idx is not None and images:
+            # A specific asset deep-link is active: Calculate modulo to find the exact image
+            meta_index = url_idx % len(images)
             social_img_path = f"{S3_DIRECT_URL}/{images[meta_index]}?v={int(time.time())}"
+        elif url_idx is None:
+            # Landing on a default route without an index: serve root folder layouts
+            if is_telugu:
+                social_img_path = f"{S3_DIRECT_URL}/home-preview-telugu.jpg?v={int(time.time())}"
+            else:
+                social_img_path = f"{S3_DIRECT_URL}/home-preview.jpg?v={int(time.time())}"
+        elif images:
+            # Fallback for unexpected edge scenarios
+            social_img_path = f"{S3_DIRECT_URL}/{images[0]}?v={int(time.time())}"
         else:
             social_img_path = f"{S3_DIRECT_URL}/logo.png"
 
@@ -199,8 +211,8 @@ def lambda_handler(event, context):
         h += '  </div>'
         h += '</div>'
         
-        # JAVASCRIPT
-        h += f'<script>const m=document.getElementById("subM"), lb=document.getElementById("lightbox"), lbImg=document.getElementById("lightbox-img"), lbContent=document.getElementById("lbContent");'
+        # JAVASCRIPT - Kept completely intact with the working standard strings
+        h += ' <script>const m=document.getElementById("subM"), lb=document.getElementById("lightbox"), lbImg=document.getElementById("lightbox-img"), lbContent=document.getElementById("lbContent");'
         h += f'const allUrls = {json.dumps(js_img_urls)};'
         h += 'let activeIdx = null;'
         h += 'let startY = 0, currentY = 0, isDragging = false;'
@@ -231,7 +243,6 @@ def lambda_handler(event, context):
         h += '  openLightbox(nextIdx);'
         h += '}'
         
-        # New Previous Asset Logic
         h += 'function prevAsset() {'
         h += '  if(activeIdx === null || allUrls.length === 0) return;'
         h += '  let prevIdx = (activeIdx - 1 + allUrls.length) % allUrls.length;'
@@ -249,7 +260,6 @@ def lambda_handler(event, context):
         h += '  }'
         h += '}'
         
-        # Desktop Keyboard Support (Arrow Keys)
         h += 'document.addEventListener("keydown", e => {'
         h += '  if (!lb.classList.contains("show")) return;'
         h += '  if (e.key === "ArrowRight") nextAsset();'
@@ -257,7 +267,6 @@ def lambda_handler(event, context):
         h += '  if (e.key === "Escape") closeLightbox();'
         h += '});'
         
-        # Touch mechanics
         h += 'lb.addEventListener("touchstart", e => { startY = e.touches[0].clientY; isDragging = true; }, {passive: true});'
         h += 'lb.addEventListener("touchmove", e => {'
         h += '  if (!isDragging) return;'
