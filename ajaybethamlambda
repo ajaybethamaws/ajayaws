@@ -120,17 +120,17 @@ def lambda_handler(event, context):
         h += '.grid-item:hover { transform: scale(1.02); border-color: rgba(56, 189, 248, 0.5); box-shadow: 0 12px 24px rgba(0,0,0,0.3); }'
         h += '.grid-item img { position: absolute; top: 0; left: 0; width: 100%; height: 100%; object-fit: cover; }'
         
-        # LIGHTBOX POPUP MODAL STYLING (Removed top close button styles)
+        # LIGHTBOX MODAL
         h += '.lightbox { display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(15, 23, 42, 0.95); backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px); z-index: 200; align-items: center; justify-content: center; opacity: 0; transition: opacity 0.3s ease; touch-action: none; }'
         h += '.lightbox.show { display: flex; opacity: 1; }'
         h += '.lightbox-content { position: relative; max-width: 90vw; max-height: 85vh; display: flex; flex-direction: column; align-items: center; transition: transform 0.2s ease; }'
         h += '.lightbox-img { max-width: 100%; max-height: 65vh; border-radius: 16px; box-shadow: 0 25px 50px -12px rgba(0,0,0,0.5); border: 1px solid rgba(255,255,255,0.1); object-fit: contain; user-select: none; -webkit-user-drag: none; }'
         
-        # Enhanced Action Bottom Toolbar with Close Option
+        # Balanced Action Bottom Toolbar
         h += '.lightbox-actions { display: flex; gap: 24px; margin-top: 24px; z-index: 210; background: rgba(30, 41, 59, 0.6); padding: 8px 24px; border-radius: 30px; border: 1px solid rgba(255,255,255,0.08); backdrop-filter: blur(8px); }'
         h += '.lightbox-btn { width: 44px; height: 44px; display: flex; justify-content: center; align-items: center; cursor: pointer; transition: 0.25s; color: #94a3b8; }'
         h += '.lightbox-btn:hover { transform: scale(1.1); color: #38bdf8; }'
-        h += '.lightbox-btn.close-btn:hover { color: #f43f5e; }' # Subtle reddish hue for close target on hover
+        h += '.lightbox-btn.close-btn:hover { color: #f43f5e; }'
         
         h += '.icon-btn { position: fixed; top: 20px; background: rgba(255,255,255,0.1); padding: 10px; border-radius: 50%; border: 1px solid rgba(255,255,255,0.2); cursor: pointer; color: white; transition: 0.3s; z-index: 100; display: flex; align-items: center; justify-content: center; }'
         h += '.lang-btn { right: 20px; border-radius: 20px; padding: 8px 16px; text-decoration: none; font-size: 13px; font-weight: bold; width: auto; }'
@@ -139,7 +139,7 @@ def lambda_handler(event, context):
         h += '.modal input { background: rgba(255,255,255,0.1); border: 1px solid rgba(255,255,255,0.2); color: white; padding: 12px; border-radius: 10px; width: 100%; box-sizing: border-box; margin-bottom: 12px; outline: none; font-size: 16px; }'
         h += '.modal button { background: #38bdf8; color: #0f172a; border: none; padding: 12px; width: 100%; border-radius: 10px; font-weight: bold; cursor: pointer; font-size: 16px; }'
         
-        h += '@media (max-width: 768px) { .header-container { padding: 50px 16px 24px 16px; } .profile-logo-wrapper { width: 80px; height: 80px; margin-bottom: 16px; } .profile-logo img { width: 50px; height: 50px; } .banner-text { font-size: 16px; } .gallery-grid { gap: 4px; padding: 0 4px; } .grid-item { border-radius: 4px; } .divider { margin-bottom: 16px; } .lightbox-content { max-width: 95vw; } .lightbox-actions { gap: 20px; padding: 6px 20px; } }'
+        h += '@media (max-width: 768px) { .header-container { padding: 50px 16px 24px 16px; } .profile-logo-wrapper { width: 80px; height: 80px; margin-bottom: 16px; } .profile-logo img { width: 50px; height: 50px; } .banner-text { font-size: 16px; } .gallery-grid { gap: 4px; padding: 0 4px; } .grid-item { border-radius: 4px; } .divider { margin-bottom: 16px; } .lightbox-content { max-width: 95vw; } .lightbox-actions { gap: 16px; padding: 6px 16px; } }'
         h += '</style></head><body>'
         
         toggle_label = "Switch to English" if is_telugu else "Switch to Telugu"
@@ -179,15 +179,19 @@ def lambda_handler(event, context):
         h += '  <div id="lbContent" class="lightbox-content" onclick="event.stopPropagation()">'
         h += '    <img id="lightbox-img" class="lightbox-img" src="" alt="Expanded Verse">'
         h += '    <div class="lightbox-actions">'
-        # Action 1: Close Icon Button
+        # Action 1: Prev Chevron
+        h += '      <div class="lightbox-btn" onclick="prevAsset()" title="Previous Image">'
+        h += '        <svg width="24" height="24" fill="currentColor" viewBox="0 0 24 24"><path d="M15.41 7.41L14 6l-6 6 6 6 1.41-1.41L10.83 12z"/></svg>'
+        h += '      </div>'
+        # Action 2: Close Icon Button
         h += '      <div class="lightbox-btn close-btn" onclick="closeLightbox()" title="Close">'
         h += '        <svg width="24" height="24" fill="currentColor" viewBox="0 0 24 24"><path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>'
         h += '      </div>'
-        # Action 2: Share Icon Button
+        # Action 3: Share Icon Button
         h += '      <div class="lightbox-btn" onclick="shareCurrentAsset()" title="Share Link">'
         h += '        <svg width="24" height="24" fill="currentColor" viewBox="0 0 24 24"><path d="M18 16.08c-.76 0-1.44.3-1.96.77L8.91 12.7c.05-.23.09-.46.09-.7s-.04-.47-.09-.7l7.05-4.11c.54.5 1.25.81 2.04.81 1.66 0 3-1.34 3-3s-1.34-3-3-3-3 1.34-3 3c0 .24.04.47.09.7L8.04 9.81C7.5 9.31 6.79 9 6 9c-1.66 0-3 1.34-3 3s1.34 3 3 3c.79 0 1.5-.31 2.04-.81l7.12 4.16c-.05.21-.08.43-.08.65 0 1.61 1.31 2.92 2.92 2.92s2.92-1.31 2.92-2.92c0-1.61-1.31-2.92-2.92-2.92z"/></svg>'
         h += '      </div>'
-        # Action 3: Next Chevron Loop
+        # Action 4: Next Chevron
         h += '      <div class="lightbox-btn" onclick="nextAsset()" title="Next Image">'
         h += '        <svg width="24" height="24" fill="currentColor" viewBox="0 0 24 24"><path d="M10 6L8.59 7.41 13.17 12l-4.58 4.59L10 18l6-6z"/></svg>'
         h += '      </div>'
@@ -199,9 +203,7 @@ def lambda_handler(event, context):
         h += f'<script>const m=document.getElementById("subM"), lb=document.getElementById("lightbox"), lbImg=document.getElementById("lightbox-img"), lbContent=document.getElementById("lbContent");'
         h += f'const allUrls = {json.dumps(js_img_urls)};'
         h += 'let activeIdx = null;'
-        
-        # Gesture Variables for Swipe down to dismiss mechanics
-        h += 'let startY = 0, currentY = 0, isDragging = False;'
+        h += 'let startY = 0, currentY = 0, isDragging = false;'
         
         h += 'function toggleM(e){ e.stopPropagation(); m.style.display=(m.style.display==="block")?"none":"block"; }'
         h += 'function closeM(){ m.style.display="none"; }'
@@ -229,6 +231,13 @@ def lambda_handler(event, context):
         h += '  openLightbox(nextIdx);'
         h += '}'
         
+        # New Previous Asset Logic
+        h += 'function prevAsset() {'
+        h += '  if(activeIdx === null || allUrls.length === 0) return;'
+        h += '  let prevIdx = (activeIdx - 1 + allUrls.length) % allUrls.length;'
+        h += '  openLightbox(prevIdx);'
+        h += '}'
+        
         h += 'function shareCurrentAsset(){'
         h += '  if(activeIdx === null) return;'
         h += '  const shareUrl = window.location.origin + window.location.pathname + "?idx=" + activeIdx;'
@@ -240,7 +249,15 @@ def lambda_handler(event, context):
         h += '  }'
         h += '}'
         
-        # TOUCH / SWIPE DOWN DISMISS ENGINE FOR MOBILE
+        # Desktop Keyboard Support (Arrow Keys)
+        h += 'document.addEventListener("keydown", e => {'
+        h += '  if (!lb.classList.contains("show")) return;'
+        h += '  if (e.key === "ArrowRight") nextAsset();'
+        h += '  if (e.key === "ArrowLeft") prevAsset();'
+        h += '  if (e.key === "Escape") closeLightbox();'
+        h += '});'
+        
+        # Touch mechanics
         h += 'lb.addEventListener("touchstart", e => { startY = e.touches[0].clientY; isDragging = true; }, {passive: true});'
         h += 'lb.addEventListener("touchmove", e => {'
         h += '  if (!isDragging) return;'
