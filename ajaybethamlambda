@@ -5,6 +5,7 @@ import random
 import time
 from botocore.config import Config
 
+# --- GLOBAL INITIALIZATION (Fixes NameError) ---
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
 
@@ -46,7 +47,7 @@ def get_sorted_images(folder_prefix):
             image_cache[cache_key] = {'keys': sorted_keys, 'last_updated': current_time}
         except Exception as e:
             logger.error(f"Error updating S3 asset cache: {str(e)}")
-    return image_cache[cache_key]['keys']
+    return image_cache[cache_key]['keys'] or []
 
 def lambda_handler(event, context):
     global image_cache
@@ -61,6 +62,7 @@ def lambda_handler(event, context):
         is_telugu = clean_path.lower() == "telugu"
         folder_prefix = "telugu/" if is_telugu else "english/"
 
+        # --- 302 STATIC REDIRECTS (Synchronized with exact S3 names) ---
         if clean_path in ["favicon.ico", "apple-touch-icon.png", "logo.png", "home-preview.jpg", "home-preview-telugu.jpg"]:
             return {'statusCode': 302, 'headers': {'Location': f"{S3_DIRECT_URL}/{clean_path}"}, 'body': ''}
 
@@ -75,27 +77,30 @@ def lambda_handler(event, context):
             url_idx = None
 
         display_title = "Times of Refreshing"
-        images = get_sorted_images(folder_prefix)
         
-        # FIXED: Pure parameter query specifically isolated for WhatsApp crawler matching
-        if url_idx is not None and images:
-            meta_index = url_idx % len(images)
-            social_img_path = f"{S3_DIRECT_URL}/{images[meta_index]}?wspreview=1"
-        elif url_idx is None:
+        # --- CRAWLER LINK POINTERS (Synchronized with exact S3 names) ---
+        if url_idx is None:
             social_img_path = f"{S3_DIRECT_URL}/home-preview-telugu.jpg?wspreview=1" if is_telugu else f"{S3_DIRECT_URL}/home-preview.jpg?wspreview=1"
-        elif images:
-            social_img_path = f"{S3_DIRECT_URL}/{images[0]}?wspreview=1"
+            images = get_sorted_images(folder_prefix)
         else:
-            social_img_path = f"{S3_DIRECT_URL}/logo.png"
+            images = get_sorted_images(folder_prefix)
+            if images:
+                meta_index = url_idx % len(images)
+                social_img_path = f"{S3_DIRECT_URL}/{images[meta_index]}?wspreview=1"
+            else:
+                social_img_path = f"{S3_DIRECT_URL}/logo.png"
 
         h = f'<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">'
+        
+        # OPEN GRAPH TAGS (Optimized for Meta/WhatsApp Crawlers)
         h += f'<meta property="og:title" content="{display_title}">'
         h += f'<meta property="og:image" content="{social_img_path}">'
         h += f'<meta property="og:image:type" content="image/jpeg">'
-        
-        # FIXED: Explicit dimensions forcing WhatsApp payload validation to clear immediately
         h += f'<meta property="og:image:width" content="1200">'
         h += f'<meta property="og:image:height" content="630">'
+        h += f'<meta property="og:url" content="{S3_BASE_URL}/{clean_path}">'
+        h += f'<meta property="og:type" content="website">'
+        h += f'<meta property="og:description" content="A daily digital gallery dedicated to spiritual focus, scriptural meditation, and inner encouragement.">'
         
         h += f'<title>{display_title}</title><link rel="icon" href="/favicon.ico">'
         h += '<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;700&family=Noto+Sans+Telugu:wght@400;700&display=swap" rel="stylesheet">'
@@ -252,12 +257,13 @@ def lambda_handler(event, context):
         h += '  }'
         h += '}'
         
-        h += 'document.addEventListener("keydown", e => {'
-        h += '  if (!lb.classList.contains("show")) return;'
-        h += '  if (e.key === "ArrowRight") nextAsset();'
-        h += '  if (e.key === "ArrowLeft") prevAsset();'
-        h += '  if (e.key === "Escape") closeLightbox();'
-        h += '});'
+        document_event_listeners = 'document.addEventListener("keydown", e => {'
+        document_event_listeners += '  if (!lb.classList.contains("show")) return;'
+        document_event_listeners += '  if (e.key === "ArrowRight") nextAsset();'
+        document_event_listeners += '  if (e.key === "ArrowLeft") prevAsset();'
+        document_event_listeners += '  if (e.key === "Escape") closeLightbox();'
+        document_event_listeners += '});'
+        h += document_event_listeners
         
         h += 'lb.addEventListener("touchstart", e => { startY = e.touches[0].clientY; isDragging = true; }, {passive: true});'
         h += 'lb.addEventListener("touchmove", e => {'
