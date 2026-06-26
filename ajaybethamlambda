@@ -77,13 +77,14 @@ def lambda_handler(event, context):
         display_title = "Times of Refreshing"
         images = get_sorted_images(folder_prefix)
         
+        # FIXED: Pure parameter query specifically isolated for WhatsApp crawler matching
         if url_idx is not None and images:
             meta_index = url_idx % len(images)
-            social_img_path = f"{S3_DIRECT_URL}/{images[meta_index]}?v={int(time.time())}"
+            social_img_path = f"{S3_DIRECT_URL}/{images[meta_index]}?wspreview=1"
         elif url_idx is None:
-            social_img_path = f"{S3_DIRECT_URL}/home-preview-telugu.jpg?v={int(time.time())}" if is_telugu else f"{S3_DIRECT_URL}/home-preview.jpg?v={int(time.time())}"
+            social_img_path = f"{S3_DIRECT_URL}/home-preview-telugu.jpg?wspreview=1" if is_telugu else f"{S3_DIRECT_URL}/home-preview.jpg?wspreview=1"
         elif images:
-            social_img_path = f"{S3_DIRECT_URL}/{images[0]}?v={int(time.time())}"
+            social_img_path = f"{S3_DIRECT_URL}/{images[0]}?wspreview=1"
         else:
             social_img_path = f"{S3_DIRECT_URL}/logo.png"
 
@@ -91,6 +92,11 @@ def lambda_handler(event, context):
         h += f'<meta property="og:title" content="{display_title}">'
         h += f'<meta property="og:image" content="{social_img_path}">'
         h += f'<meta property="og:image:type" content="image/jpeg">'
+        
+        # FIXED: Explicit dimensions forcing WhatsApp payload validation to clear immediately
+        h += f'<meta property="og:image:width" content="1200">'
+        h += f'<meta property="og:image:height" content="630">'
+        
         h += f'<title>{display_title}</title><link rel="icon" href="/favicon.ico">'
         h += '<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;700&family=Noto+Sans+Telugu:wght@400;700&display=swap" rel="stylesheet">'
         
@@ -113,18 +119,17 @@ def lambda_handler(event, context):
         h += '.gallery-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 28px; width: 100%; max-width: 935px; padding: 0 20px; box-sizing: border-box; }'
         h += '.grid-item { position: relative; width: 100%; padding-top: 100%; background: rgba(255,255,255,0.02); border-radius: 12px; overflow: hidden; cursor: pointer; border: 1px solid rgba(255,255,255,0.05); transition: transform 0.25s cubic-bezier(0.4, 0, 0.2, 1), border-color 0.25s; }'
         h += '.grid-item:hover { transform: scale(1.02); border-color: rgba(56, 189, 248, 0.5); box-shadow: 0 12px 24px rgba(0,0,0,0.3); }'
-        h += '.grid-item img { position: absolute; top: 0; left: 0; width: 100%; height: 100%; object-fit: cover; -webkit-user-drag: none; }'
+        h += '.grid-item img { position: absolute; top: 0; left: 0; width: 100%; height: 100%; object-fit: cover; -webkit-user-drag: none; -webkit-touch-callout: none; }'
         
         # LIGHTBOX MODAL
         h += '.lightbox { display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(15, 23, 42, 0.95); backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px); z-index: 200; align-items: center; justify-content: center; opacity: 0; transition: opacity 0.3s ease; touch-action: none; }'
         h += '.lightbox.show { display: flex; opacity: 1; }'
         
-        # FIXED: Wrap image & watermark inside a distinct framing container for correct overlay tracking
         h += '.lightbox-content { position: relative; max-width: 90vw; max-height: 85vh; display: flex; flex-direction: column; align-items: center; transition: transform 0.2s ease; }'
         h += '.img-frame { position: relative; display: inline-flex; max-width: 100%; max-height: 65vh; }'
-        h += '.lightbox-img { max-width: 100%; max-height: 65vh; border-radius: 16px; box-shadow: 0 25px 50px -12px rgba(0,0,0,0.5); border: 1px solid rgba(255,255,255,0.1); object-fit: contain; user-select: none; -webkit-user-drag: none; }'
+        h += '.lightbox-img { max-width: 100%; max-height: 65vh; border-radius: 16px; box-shadow: 0 25px 50px -12px rgba(0,0,0,0.5); border: 1px solid rgba(255,255,255,0.1); object-fit: contain; user-select: none; -webkit-user-select: none; -webkit-user-drag: none; -webkit-touch-callout: none; }'
+        h += '.protection-shield { position: absolute; top: 0; left: 0; width: 100%; height: 100%; z-index: 202; background: transparent; -webkit-touch-callout: none; }'
         
-        # FIXED: Position bottom center relative strictly to the bounds of the visible graphic asset frame
         h += '.watermark-overlay { position: absolute; bottom: 16px; left: 50%; transform: translateX(-50%); width: 45px; height: 45px; opacity: 0.65; pointer-events: none; z-index: 205; filter: drop-shadow(0px 2px 4px rgba(0,0,0,0.5)); }'
         h += '.watermark-overlay img { width: 100%; height: 100%; object-fit: contain; }'
         
@@ -175,11 +180,11 @@ def lambda_handler(event, context):
             h += '</div>'
         h += '</div>'
         
-        # LIGHTBOX CONFIGURATION WITH ENCAPSULATING BOUNDING FRAME
         h += '<div id="lightbox" class="lightbox" onclick="closeLightbox()">'
         h += '  <div id="lbContent" class="lightbox-content" onclick="event.stopPropagation()">'
         h += '    <div class="img-frame">'
         h += '      <img id="lightbox-img" class="lightbox-img" src="" alt="Expanded Verse">'
+        h += '      <div class="protection-shield"></div>'
         h += '      <div class="watermark-overlay"><img src="/logo.png" alt="Watermark Logo"></div>'
         h += '    </div>'
         h += '    <div class="lightbox-actions">'
@@ -199,7 +204,6 @@ def lambda_handler(event, context):
         h += '  </div>'
         h += '</div>'
         
-        # JAVASCRIPT
         h += ' <script>const m=document.getElementById("subM"), lb=document.getElementById("lightbox"), lbImg=document.getElementById("lightbox-img"), lbContent=document.getElementById("lbContent");'
         h += f'const allUrls = {json.dumps(js_img_urls)};'
         h += 'let activeIdx = null;'
