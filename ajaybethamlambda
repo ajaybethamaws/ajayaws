@@ -13,7 +13,6 @@ logger.setLevel(logging.INFO)
 BUCKET_NAME = 'ajaybetham-sta'
 REGION = 'us-east-1'
 S3_DIRECT_URL = f"https://{BUCKET_NAME}.s3.{REGION}.amazonaws.com"
-S3_BASE_URL = f"https://ajaybetham.com"
 SUBSCRIBER_URL = "https://dpqshmdcgoahjdfxae56f65evy0ohfvl.lambda-url.us-east-1.on.aws/"
 
 s3_config = Config(
@@ -62,6 +61,12 @@ def lambda_handler(event, context):
         is_telugu = clean_path.lower() == "telugu"
         folder_prefix = "telugu/" if is_telugu else "english/"
 
+        # --- DYNAMIC DOMAIN EXTRACTION ---
+        # Pulls 'verstantly.com' or 'ajaybetham.com' straight from the HTTP request headers
+        headers = event.get('headers', {}) or {}
+        domain = headers.get('host', 'verstantly.com') 
+        base_url = f"https://{domain}"
+
         # --- 302 STATIC REDIRECTS (Synchronized with exact S3 names) ---
         if clean_path in ["favicon.ico", "apple-touch-icon.png", "logo.png", "home-preview.jpg", "home-preview-telugu.jpg"]:
             return {'statusCode': 302, 'headers': {'Location': f"{S3_DIRECT_URL}/{clean_path}"}, 'body': ''}
@@ -76,7 +81,7 @@ def lambda_handler(event, context):
         except ValueError:
             url_idx = None
 
-        display_title = "Times of Refreshing"
+        display_title = "Verse.Instantly.Constantly"
         
         # --- CRAWLER LINK POINTERS (Synchronized with exact S3 names) ---
         if url_idx is None:
@@ -92,15 +97,15 @@ def lambda_handler(event, context):
 
         h = f'<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">'
         
-        # OPEN GRAPH TAGS (Optimized for Meta/WhatsApp Crawlers)
+        # OPEN GRAPH TAGS (Dynamically bound to active handling host)
         h += f'<meta property="og:title" content="{display_title}">'
         h += f'<meta property="og:image" content="{social_img_path}">'
         h += f'<meta property="og:image:type" content="image/jpeg">'
         h += f'<meta property="og:image:width" content="1200">'
         h += f'<meta property="og:image:height" content="630">'
-        h += f'<meta property="og:url" content="{S3_BASE_URL}/{clean_path}">'
+        h += f'<meta property="og:url" content="{base_url}/{clean_path}">'
         h += f'<meta property="og:type" content="website">'
-        h += f'<meta property="og:description" content="A daily digital gallery dedicated to spiritual focus, scriptural meditation, and inner encouragement.">'
+        h += f'<meta property="og:description" content="Daily scriptural meditation and verses delivered instantly. Stay spiritually refreshed and connected to the Word, constantly.">'
         
         h += f'<title>{display_title}</title><link rel="icon" href="/favicon.ico">'
         h += '<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;700&family=Noto+Sans+Telugu:wght@400;700&display=swap" rel="stylesheet">'
