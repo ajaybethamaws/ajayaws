@@ -1,0 +1,223 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Verstantly Admin Dashboard</title>
+    <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4"></script>
+</head>
+<body class="h-screen max-h-screen bg-slate-100 flex flex-col font-sans text-slate-800 overflow-hidden">
+
+    <header class="bg-slate-900 text-white p-4 shadow-md shrink-0">
+        <h1 class="text-xl font-bold">Verstantly Content Management</h1>
+        <p class="text-xs text-slate-400 mt-0.5">Select any image card below to instantly modify descriptions and S3 metadata.</p>
+    </header>
+
+    <div class="flex-1 flex flex-col md:flex-row overflow-hidden relative">
+        
+        <div class="flex-1 flex flex-col relative overflow-hidden bg-slate-50">
+            
+            <div id="preview-modal" class="hidden absolute inset-0 bg-slate-900/85 backdrop-blur-sm z-30 flex flex-col items-center justify-center p-6 transition-all duration-200">
+                <button onclick="closePreview()" class="absolute top-4 right-4 bg-white/10 hover:bg-white/20 text-white font-bold p-2.5 rounded-full shadow transition-all focus:outline-none z-40">
+                    <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path></svg>
+                </button>
+                
+                <div class="max-w-full max-h-[75vh] flex items-center justify-center bg-black/40 rounded-xl overflow-hidden shadow-2xl border border-white/10 p-2">
+                    <img id="modal-image-view" src="" class="max-w-full max-h-[72vh] object-contain rounded-md" alt="High resolution target view">
+                </div>
+
+                <div class="mt-4 bg-white/90 backdrop-blur text-slate-900 px-6 py-2 rounded-full text-center max-w-xl font-medium shadow-md text-xs font-mono truncate">
+                    <span id="modal-reference-view"></span>
+                </div>
+            </div>
+
+            <main class="flex-1 p-6 overflow-y-auto h-full min-w-0">
+                <h2 class="text-lg font-bold text-slate-800 mb-4">Your Image Assets</h2>
+                <div id="image-grid" class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-4 pb-12">
+                    <p class="text-sm text-slate-500 col-span-full">Loading image vault...</p>
+                </div>
+            </main>
+        </div>
+
+        <aside class="w-full md:w-[400px] bg-white border-t md:border-t-0 md:border-l border-slate-200 shadow-xl p-6 flex flex-col overflow-y-auto h-full shrink-0 relative z-40">
+            <div id="edit-workspace" class="h-full">
+                <div class="h-full flex flex-col items-center justify-center text-center p-6 text-slate-400 mt-20">
+                    <svg class="w-12 h-12 text-slate-300 mb-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"></path>
+                    </svg>
+                    <p class="text-sm font-medium">Click on any image card to unlock the editing workspace properties.</p>
+                </div>
+            </div>
+        </aside>
+    </div>
+
+    <script>
+        const API_BASE_URL = 'https://llmix4d7q6.execute-api.us-east-1.amazonaws.com'; 
+        const CLOUDFRONT_DOMAIN = 'd15si3zl564vcw.cloudfront.net';
+
+        let appState = {
+            images: [],
+            selectedImage: null,
+            isSaving: false
+        };
+
+        // 1. Load initial dataset from AWS
+        async function loadGallery() {
+            try {
+                const response = await fetch(`${API_BASE_URL}/images`);
+                const data = await response.json();
+                appState.images = data.images || [];
+                renderGrid();
+            } catch (err) {
+                document.getElementById('image-grid').innerHTML = `
+                    <p class="text-sm text-red-600 col-span-full font-medium">Could not load your image library from AWS. Check API connection.</p>
+                `;
+            }
+        }
+
+        // 2. Render the grid of image cards using CloudFront paths
+        function renderGrid() {
+            const grid = document.getElementById('image-grid');
+            if (appState.images.length === 0) {
+                grid.innerHTML = '<p class="text-sm text-slate-500 col-span-full">No image assets found in database.</p>';
+                return;
+            }
+
+            grid.innerHTML = appState.images.map(img => {
+                const isSelected = appState.selectedImage?.image_id === img.image_id;
+                return `
+                    <div onclick="selectImage('${img.image_id}')" 
+                         class="cursor-pointer bg-white rounded-xl overflow-hidden shadow-sm border-2 transition-all hover:scale-[1.01] ${isSelected ? 'border-blue-600 ring-2 ring-blue-100' : 'border-slate-200'}">
+                        <div class="aspect-video bg-slate-200 relative overflow-hidden">
+                            <img src="https://${CLOUDFRONT_DOMAIN}/${img.s3_key}" class="w-full h-full object-cover" onerror="this.src='https://placehold.co/300x200?text=S3+Asset+Pending'">
+                        </div>
+                        <div class="p-3">
+                            <p class="text-xs font-mono font-bold text-slate-700 truncate">${img.current_filename}</p>
+                            <p class="text-xs text-slate-500 mt-1 font-semibold truncate">${img.reference || '⚠️ No Reference'}</p>
+                        </div>
+                    </div>
+                `;
+            }).join('');
+        }
+
+        // 3. Highlight selected image, load values into form, and open local pane pop-out
+        window.selectImage = function(id) {
+            const img = appState.images.find(i => i.image_id === id);
+            appState.selectedImage = img;
+            renderGrid();
+            renderForm();
+            
+            // Populate and showcase the overlay limited strictly to the left partition workspace
+            document.getElementById('modal-image-view').src = `https://${CLOUDFRONT_DOMAIN}/${img.s3_key}`;
+            document.getElementById('modal-reference-view').innerText = img.reference ? `PATH: ${img.s3_key} (${img.reference})` : `PATH: ${img.s3_key}`;
+            document.getElementById('preview-modal').classList.remove('hidden');
+        };
+
+        // Close pop-out preview helper
+        window.closePreview = function() {
+            document.getElementById('preview-modal').classList.add('hidden');
+        };
+
+        // Close local pop-out overlay if clicking outside the core inner boundary block zone
+        document.getElementById('preview-modal').addEventListener('click', function(e) {
+            if (e.target === this) closePreview();
+        });
+
+        // 4. Render the input form layout on the right panel
+        function renderForm() {
+            const panel = document.getElementById('edit-workspace');
+            const img = appState.selectedImage;
+
+            panel.innerHTML = `
+                <form id="metadata-form" onsubmit="saveMetadata(event)" class="space-y-5">
+                    <div class="border-b border-slate-200 pb-3">
+                        <h3 class="text-lg font-bold text-slate-900">Modify Image Data</h3>
+                        <span class="text-xs font-mono bg-slate-100 px-2 py-0.5 rounded mt-1 inline-block text-slate-500">ID: ${img.image_id}</span>
+                    </div>
+
+                    <div id="status-alert" class="hidden p-3 rounded-lg text-xs font-medium"></div>
+
+                    <div>
+                        <label class="block text-xs font-bold text-slate-700 uppercase tracking-wide mb-1">Bible Reference</label>
+                        <input type="text" id="form-reference" value="${img.reference || ''}" placeholder="e.g. John 3:16" class="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm focus:outline-none focus:border-blue-500" required>
+                    </div>
+
+                    <div>
+                        <label class="block text-xs font-bold text-slate-700 uppercase tracking-wide mb-1">Image Filename</label>
+                        <input type="text" id="form-filename" value="${img.current_filename || ''}" placeholder="john-3-16-scenery.jpg" class="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm font-mono focus:outline-none focus:border-blue-500" required>
+                    </div>
+
+                    <div>
+                        <label class="block text-xs font-bold text-slate-700 uppercase tracking-wide mb-1">Scripture Description (Verse Text)</label>
+                        <textarea id="form-verse" rows="4" placeholder="Type full verse text here..." class="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm focus:outline-none focus:border-blue-500" required>${img.verse_text || ''}</textarea>
+                    </div>
+
+                    <div class="pt-2 flex gap-2">
+                        <button type="button" onclick="closePreview()" class="px-3 py-2 border border-slate-300 hover:bg-slate-50 text-slate-700 rounded-lg text-sm font-medium transition-colors">
+                            Dismiss View
+                        </button>
+                        <button type="submit" id="save-btn" class="flex-1 bg-blue-600 hover:bg-blue-700 text-white font-bold py-2.5 px-4 rounded-lg text-sm transition-colors shadow">
+                            Save Changes
+                        </button>
+                    </div>
+                </form>
+            `;
+        }
+
+        // 5. Submit updated fields directly to AWS Lambda via API Gateway
+        window.saveMetadata = async function(e) {
+            e.preventDefault();
+            if (appState.isSaving) return;
+
+            const saveBtn = document.getElementById('save-btn');
+            const alertBox = document.getElementById('status-alert');
+            
+            appState.isSaving = true;
+            saveBtn.innerText = 'Processing Updates on AWS...';
+            saveBtn.disabled = true;
+
+            const payload = {
+                image_id: appState.selectedImage.image_id,
+                s3_key: appState.selectedImage.s3_key,
+                verse_text: document.getElementById('form-verse').value,
+                reference: document.getElementById('form-reference').value,
+                requested_filename: document.getElementById('form-filename').value
+            };
+
+            try {
+                const response = await fetch(`${API_BASE_URL}/images/update`, {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+                const result = await response.json();
+
+                if (result.success) {
+                    alertBox.className = "p-3 rounded-lg text-xs font-medium bg-green-50 text-green-700 border border-green-200 block";
+                    alertBox.innerText = "Asset updated perfectly!";
+                    
+                    appState.images = appState.images.map(img => img.image_id === payload.image_id ? result.data : img);
+                    appState.selectedImage = result.data;
+                    renderGrid();
+
+                    // Instantly sync up the string description under the popped-out view
+                    document.getElementById('modal-reference-view').innerText = result.data.reference ? `PATH: ${result.data.s3_key} (${result.data.reference})` : `PATH: ${result.data.s3_key}`;
+                } else {
+                    alertBox.className = "p-3 rounded-lg text-xs font-medium bg-red-50 text-red-700 border border-red-200 block";
+                    alertBox.innerText = result.message || "Failed to save edits.";
+                }
+            } catch (err) {
+                alertBox.className = "p-3 rounded-lg text-xs font-medium bg-red-50 text-red-700 border border-red-200 block";
+                alertBox.innerText = "Network connection failure.";
+            } finally {
+                appState.isSaving = false;
+                saveBtn.innerText = 'Save Changes';
+                saveBtn.disabled = false;
+            }
+        };
+
+        // Initialize display list on load
+        loadGallery();
+    </script>
+</body>
+</html>
