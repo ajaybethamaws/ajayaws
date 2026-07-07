@@ -270,18 +270,25 @@ def lambda_handler(event, context):
         document_event_listeners += '});'
         h += document_event_listeners
         
-        h += 'lb.addEventListener("touchstart", e => { startY = e.touches[0].clientY; isDragging = true; }, {passive: true});'
+        # --- TOUCH INTERACTION ZONE (Vertical to close, Horizontal to swipe) ---
+        h += 'let startX = 0, currentX = 0;'
+        h += 'lb.addEventListener("touchstart", e => { startY = e.touches[0].clientY; startX = e.touches[0].clientX; isDragging = true; }, {passive: true});'
         h += 'lb.addEventListener("touchmove", e => {'
         h += '  if (!isDragging) return;'
         h += '  currentY = e.touches[0].clientY;'
+        h += '  currentX = e.touches[0].clientX;'
         h += '  let deltaY = currentY - startY;'
-        h += '  if (deltaY > 0) { lbContent.style.transform = `translateY(${deltaY}px)`; }'
+        h += '  let deltaX = currentX - startX;'
+        h += '  if (deltaY > 0 && Math.abs(deltaY) > Math.abs(deltaX)) { lbContent.style.transform = `translateY(${deltaY}px)`; }'
         h += '}, {passive: true});'
         h += 'lb.addEventListener("touchend", e => {'
         h += '  if (!isDragging) return;'
         h += '  isDragging = false;'
         h += '  let deltaY = currentY - startY;'
-        h += '  if (deltaY > 120) { closeLightbox(); } else { lbContent.style.transform = "translateY(0)"; }'
+        h += '  let deltaX = currentX - startX;'
+        h += '  if (Math.abs(deltaX) > Math.abs(deltaY) && Math.abs(deltaX) > 60) {'
+        h += '    if (deltaX < 0) { nextAsset(); } else { prevAsset(); }'
+        h += '  } else if (deltaY > 120) { closeLightbox(); } else { lbContent.style.transform = "translateY(0)"; }'
         h += '});'
         
         h += 'document.addEventListener("contextmenu", e => e.preventDefault());'
