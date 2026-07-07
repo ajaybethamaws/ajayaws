@@ -1,0 +1,129 @@
+import { S3Client, CopyObjectCommand, DeleteObjectCommand } from "@aws-sdk/client-s3";
+import { DynamoDBClient } from "@aws-sdk/client-dynamodb";
+import { DynamoDBDocumentClient, UpdateCommand, GetCommand } from "@aws-sdk/lib-dynamodb";
+
+// Initialize AWS Clients (Automatically uses the Lambda's attached IAM execution role)
+const s3Client = new S3Client({});
+const ddbClient = new DynamoDBClient({});
+const docClient = DynamoDBDocumentClient.from(ddbClient);
+
+// Environment variables configuration
+const BUCKET_NAME = process.env.BUCKET_NAME; // Your existing S3 bucket name
+const TABLE_NAME = process.env.TABLE_NAME || "verstantly-verse-images";
+
+export const handler = async (event) => {
+    // 1. Handle API Gateway CORS preflight requests (OPTIONS method)
+    if (event.requestContext && event.requestContext.http && event.requestContext.http.method === "OPTIONS") {
+        return buildResponse(200, {});
+    }
+
+    try {
+        // 2. Safely parse the incoming JSON body
+        const body = JSON.parse(event.body || "{}");
+        const { image_id, verse_text, reference, requested_filename } = body;
+
+        // Validation check for mandatory payload items
+        if (!image_id || !verse_text || !reference || !requested_filename) {
+            return buildResponse(400, { 
+                success: false, 
+                message: "Missing required fields: image_id, verse_text, reference, and requested_filename are all required." 
+            });
+        }
+
+        if (!BUCKET_NAME) {
+            console.error("Configuration Error: BUCKET_NAME environment variable is not defined.");
+            return buildResponse(500, { success: false, message: "Server configuration missing bucket context." });
+        }
+
+        // 3. Clean up the incoming filename to make it safe for web URLs and S3 keys
+        const sanitizedFilename = requested_filename
+            .toLowerCase()
+            .trim()
+            .replace(/\s+/g, "-")           // Turn spaces into single hyphens
+            .replace(/[^a-z0-9.\-_]/g, ""); // Strip out characters that aren't letters, numbers, dots, hyphens, or underscores
+
+        const newS3Key = `images/${sanitizedFilename}`;
+
+        // 4. Retrieve the existing state from the 'verstantly-verse-images' table
+        const currentItem = await docClient.send(new GetCommand({
+            TableName: TABLE_NAME,
+            Key: { image_id }
+        }));
+
+        if (!currentItem.Item) {
+            return buildResponse(404, { success: false, message: `No image record found matching ID: ${image_id}` });
+        }
+
+        const oldS3Key = currentItem.Item.s3_key;
+        let finalS3Key = oldS3Key;
+        let finalFilename = currentItem.Item.current_filename;
+
+        // 5. Execute S3 object renaming if the clean filename differs from what's stored
+        if (oldS3Key !== newS3Key) {
+            console.log(`Executing S3 object transition from [${oldS3Key}] to [${newS3Key}]`);
+
+            // Duplicate the item under its new key name
+            await s3Client.send(new CopyObjectCommand({
+                Bucket: BUCKET_NAME,
+                CopySource: encodeURIComponent(`${BUCKET_NAME}/${oldS3Key}`), // URL encode the source parameter per S3 requirements
+                Key: newS3Key
+            }));
+
+            // Safely delete the original version
+            await s3Client.send(new DeleteObjectCommand({
+                Bucket: BUCKET_NAME,
+                Key: oldS3Key
+            }));
+
+            finalS3Key = newS3Key;
+            finalFilename = sanitizedFilename;
+        }
+
+        // 6. Write the fresh metadata into your DynamoDB item attributes
+        const timestamp = new Date().toISOString();
+        const updateResult = await docClient.send(new UpdateCommand({
+            TableName: TABLE_NAME,
+            Key: { image_id },
+            UpdateExpression: "SET current_filename = :fn, s3_key = :key, verse_text = :vt, reference = :ref, updated_at = :uat",
+            ExpressionAttributeValues: {
+                ":fn": finalFilename,
+                ":key": finalS3Key,
+                ":vt": verse_text,
+                ":ref": reference,
+                ":uat": timestamp
+            },
+            ReturnValues: "ALL_NEW"
+        }));
+
+        // Return the clean data structure back to the user interface
+        return buildResponse(200, {
+            success: true,
+            message: "Metadata and filename successfully processed.",
+            data: updateResult.Attributes
+        });
+
+    } catch (error) {
+        console.error("Execution Exception Caught:", error);
+        return buildResponse(500, { 
+            success: false, 
+            message: "An internal server error occurred while updating the asset details.", 
+            error: error.message 
+        });
+    }
+};
+
+/**
+ * Builds standard API Gateway HTTP Proxy responses with correct CORS configurations
+ */
+function buildResponse(statusCode, body) {
+    return {
+        statusCode,
+        headers: {
+            "Content-Type": "application/json",
+            "Access-Control-Allow-Origin": "*", // Keep as '*' for development; switch to your exact UI URL for production
+            "Access-Control-Allow-Headers": "Content-Type,Authorization,X-Amz-Date,X-Api-Key,X-Amz-Security-Token",
+            "Access-Control-Allow-Methods": "PUT,OPTIONS"
+        },
+        body: JSON.stringify(body)
+    };
+}
