@@ -1,0 +1,191 @@
+import { S3Client, ListObjectsV2Command, HeadObjectCommand, CopyObjectCommand, DeleteObjectCommand } from "@aws-sdk/client-s3";
+import { DynamoDBClient, ScanCommand, PutItemCommand, UpdateItemCommand } from "@aws-sdk/client-dynamodb";
+
+const s3 = new S3Client({});
+const dynamo = new DynamoDBClient({});
+
+const TABLE_NAME = "verstantly-verse-images";
+const BUCKET_NAME = "ajaybetham-sta";
+
+export const handler = async (event) => {
+    let path = event.rawPath || event.requestContext?.http?.path || event.path || "/";
+    let httpMethod = event.requestContext?.http?.method || event.httpMethod || "GET";
+
+    const corsHeaders = {
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Allow-Methods": "GET,PUT,OPTIONS",
+        "Access-Control-Allow-Headers": "Content-Type"
+    };
+
+    if (httpMethod === "OPTIONS") {
+        return { statusCode: 200, headers: corsHeaders, body: "" };
+    }
+
+    try {
+        // ==========================================
+        // ROUTE 1: FETCH IMAGES & AUTO-SYNC S3
+        // ==========================================
+        if (httpMethod === "GET" && path.includes("/images") && !path.includes("/update")) {
+            const s3Response = await s3.send(new ListObjectsV2Command({ Bucket: BUCKET_NAME }));
+            const s3Objects = s3Response.Contents || [];
+
+            const dbResponse = await dynamo.send(new ScanCommand({ TableName: TABLE_NAME }));
+            const dbItems = dbResponse.Items || [];
+            
+            const dbMap = new Map();
+            dbItems.forEach(item => {
+                if (item.s3_key?.S) dbMap.set(item.s3_key.S, item);
+            });
+
+            const finalImages = [];
+
+            for (const obj of s3Objects) {
+                if (obj.Key.endsWith('/')) continue; 
+
+                if (dbMap.has(obj.Key)) {
+                    const matchedItem = dbMap.get(obj.Key);
+                    finalImages.push({
+                        image_id: matchedItem.image_id?.S || "",
+                        s3_key: matchedItem.s3_key?.S || obj.Key,
+                        current_filename: matchedItem.current_filename?.S || obj.Key.split('/').pop(),
+                        reference: matchedItem.reference?.S || "",
+                        verse_text: matchedItem.verse_text?.S || ""
+                    });
+                } else {
+                    const newId = `img_${Math.random().toString(36).substring(2, 9)}`;
+                    const fileName = obj.Key.split('/').pop();
+
+                    await dynamo.send(new PutItemCommand({
+                        TableName: TABLE_NAME,
+                        Item: {
+                            "image_id": { S: newId },
+                            "s3_key": { S: obj.Key },
+                            "current_filename": { S: fileName },
+                            "reference": { S: "" },
+                            "verse_text": { S: "" }
+                        }
+                    }));
+
+                    finalImages.push({
+                        image_id: newId,
+                        s3_key: obj.Key,
+                        current_filename: fileName,
+                        reference: "",
+                        verse_text: ""
+                    });
+                }
+            }
+
+            return {
+                statusCode: 200,
+                headers: { "Content-Type": "application/json", ...corsHeaders },
+                body: JSON.stringify({ images: finalImages })
+            };
+        }
+
+        // ==========================================
+        // ROUTE 2: UPDATE METADATA & SAFE S3 RENAME
+        // ==========================================
+        if (httpMethod === "PUT" && path.includes("/images/update")) {
+            const body = JSON.parse(event.body || "{}");
+            const { image_id, s3_key, reference, verse_text, requested_filename } = body;
+
+            if (!image_id || !s3_key) {
+                return {
+                    statusCode: 400,
+                    headers: { "Content-Type": "application/json", ...corsHeaders },
+                    body: JSON.stringify({ success: false, message: "Missing image_id or s3_key validation properties." })
+                };
+            }
+
+            let finalS3Key = s3_key;
+            let finalFileName = requested_filename;
+            const currentFileName = s3_key.split('/').pop();
+
+            // ONLY execute S3 copy/delete routines if the filename string actually changed
+            if (requested_filename && requested_filename !== currentFileName) {
+                const extIndex = requested_filename.lastIndexOf('.');
+                const baseName = extIndex !== -1 ? requested_filename.substring(0, extIndex) : requested_filename;
+                const fileExt = extIndex !== -1 ? requested_filename.substring(extIndex) : '';
+
+                const pathSegments = s3_key.split('/');
+                pathSegments.pop();
+                const folderPrefix = pathSegments.length > 0 ? pathSegments.join('/') + '/' : '';
+
+                let suffixCounter = 0;
+                let isCollision = true;
+
+                while (isCollision) {
+                    const testFileName = suffixCounter === 0 
+                        ? `${baseName}${fileExt}` 
+                        : `${baseName}_${suffixCounter}${fileExt}`;
+                    
+                    const testS3Key = `${folderPrefix}${testFileName}`;
+
+                    try {
+                        await s3.send(new HeadObjectCommand({ Bucket: BUCKET_NAME, Key: testS3Key }));
+                        suffixCounter++; 
+                    } catch (s3Error) {
+                        if (s3Error.name === "NotFound" || s3Error.$metadata?.httpStatusCode === 404) {
+                            finalS3Key = testS3Key;
+                            finalFileName = testFileName;
+                            isCollision = false; 
+                        } else {
+                            throw s3Error; 
+                        }
+                    }
+                }
+
+                await s3.send(new CopyObjectCommand({
+                    Bucket: BUCKET_NAME,
+                    CopySource: `${BUCKET_NAME}/${s3_key}`,
+                    Key: finalS3Key
+                }));
+
+                await s3.send(new DeleteObjectCommand({ Bucket: BUCKET_NAME, Key: s3_key }));
+            }
+
+            // Always update database values using isolated character names safely
+            await dynamo.send(new UpdateItemCommand({
+                TableName: TABLE_NAME,
+                Key: { "image_id": { S: image_id } },
+                UpdateExpression: "SET #ref = :r, #vxt = :v, #fnm = :f, #s3k = :k",
+                ExpressionAttributeNames: {
+                    "#ref": "reference",
+                    "#vxt": "verse_text",
+                    "#fnm": "current_filename",
+                    "#s3k": "s3_key"
+                },
+                ExpressionAttributeValues: {
+                    ":r": { S: reference || "" },
+                    ":v": { S: verse_text || "" },
+                    ":f": { S: finalFileName || currentFileName },
+                    ":k": { S: finalS3Key }
+                }
+            }));
+
+            return {
+                statusCode: 200,
+                headers: { "Content-Type": "application/json", ...corsHeaders },
+                body: JSON.stringify({
+                    success: true,
+                    data: { image_id, s3_key: finalS3Key, current_filename: finalFileName || currentFileName, reference, verse_text }
+                })
+            };
+        }
+
+        return {
+            statusCode: 404,
+            headers: { "Content-Type": "application/json", ...corsHeaders },
+            body: JSON.stringify({ message: `Route path not matched.` })
+        };
+
+    } catch (error) {
+        console.error("Fatal exception parsed:", error);
+        return {
+            statusCode: 200, // Explicitly capture crash to bypass API Gateway 500 blocks
+            headers: { "Content-Type": "application/json", ...corsHeaders },
+            body: JSON.stringify({ success: false, error: error.message })
+        };
+    }
+};
