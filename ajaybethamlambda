@@ -1,58 +1,105 @@
 import json
 import boto3
 import logging
-import random
 import time
 from botocore.config import Config
 
-# --- GLOBAL INITIALIZATION (Fixes NameError) ---
+# --- GLOBAL INITIALIZATION ---
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
 
 # --- CONFIGURATION ---
 BUCKET_NAME = 'ajaybetham-sta'
+TABLE_NAME = 'verstantly-verse-images'
 REGION = 'us-east-1'
+CLOUDFRONT_DOMAIN = 'd15si3zl564vcw.cloudfront.net'
+CLOUDFRONT_BASE = f"https://{CLOUDFRONT_DOMAIN}"
 S3_DIRECT_URL = f"https://{BUCKET_NAME}.s3.{REGION}.amazonaws.com"
 SUBSCRIBER_URL = "https://dpqshmdcgoahjdfxae56f65evy0ohfvl.lambda-url.us-east-1.on.aws/"
 
-s3_config = Config(
-    s3={'use_accelerate_endpoint': True},
-    retries={'max_attempts': 0},
-    tcp_keepalive=True,
-    max_pool_connections=50
-)
-s3_client = boto3.client('s3', region_name=REGION, config=s3_config)
+# Low-latency client tuning config
+dynamo_config = Config(retries={'max_attempts': 2}, tcp_keepalive=True, max_pool_connections=50)
+dynamo_client = boto3.client('dynamodb', region_name=REGION, config=dynamo_config)
 
-# Global in-memory structured cache
+# Global in-memory structured cache for the public page loops
 image_cache = {
-    'telugu': {'keys': [], 'last_updated': 0},
-    'english': {'keys': [], 'last_updated': 0}
+    'telugu': {'items': [], 'last_updated': 0},
+    'english': {'items': [], 'last_updated': 0}
 }
-CACHE_TTL_SECONDS = 600
+CACHE_TTL_SECONDS = 300  # 5-minute global cache window
 
-def get_sorted_images(folder_prefix):
+def get_cached_db_assets(folder_prefix):
+    """
+    Pulls normalized library documents directly from DynamoDB instead of scanning raw S3 storage keys.
+    Separates assets into Telugu and English groups based on the folder path segment prefix mapping.
+    """
     global image_cache
     current_time = time.time()
     cache_key = 'telugu' if folder_prefix == "telugu/" else 'english'
     
-    if not image_cache[cache_key]['keys'] or (current_time - image_cache[cache_key]['last_updated'] > CACHE_TTL_SECONDS):
-        logger.info(f"Cache expired or empty for {folder_prefix}. Fetching and sorting from S3...")
+    if not image_cache[cache_key]['items'] or (current_time - image_cache[cache_key]['last_updated'] > CACHE_TTL_SECONDS):
+        logger.info(f"Database layout cache stale for category [{cache_key}]. Re-indexing from DynamoDB table...")
         try:
-            resp = s3_client.list_objects_v2(Bucket=BUCKET_NAME, Prefix=folder_prefix, MaxKeys=1000)
-            contents = resp.get('Contents', [])
-            valid_images = [obj for obj in contents if obj['Key'].lower().endswith(('.jpg', '.jpeg'))]
-            valid_images.sort(key=lambda x: x['LastModified'], reverse=True)
-            sorted_keys = [obj['Key'] for obj in valid_images]
-            image_cache[cache_key] = {'keys': sorted_keys, 'last_updated': current_time}
+            # High performance bulk acquisition
+            paginator = dynamo_client.get_paginator('scan')
+            db_items = []
+            for page in paginator.paginate(TableName=TABLE_NAME):
+                db_items.extend(page.get('Items', []))
+            
+            filtered_group = []
+            for item in db_items:
+                s3_key = item.get('s3_key', {}).get('S', '')
+                # Case-insensitive folder segment check to ensure variations match properly
+                if s3_key.lower().startswith(folder_prefix.lower()):
+                    filtered_group.append({
+                        'id': item.get('image_id', {}).get('S', ''),
+                        's3_key': s3_key, # Preserve original casing for S3 direct targeting
+                        'reference': item.get('reference', {}).get('S', ''),
+                        'verse_text': item.get('verse_text', {}).get('S', '')
+                    })
+            
+            # Keep array layout stable (Can sort by filename string structure naturally)
+            filtered_group.sort(key=lambda x: x['s3_key'], reverse=True)
+            image_cache[cache_key] = {'items': filtered_group, 'last_updated': current_time}
         except Exception as e:
-            logger.error(f"Error updating S3 asset cache: {str(e)}")
-    return image_cache[cache_key]['keys'] or []
+            logger.error(f"Error executing synchronous cache compilation: {str(e)}")
+            
+    return image_cache[cache_key]['items']
+
+def get_single_db_asset(image_id, folder_prefix):
+    """
+    Executes a direct Key lookup and strictly verifies it belongs 
+    to the active language folder prefix.
+    """
+    try:
+        resp = dynamo_client.get_item(
+            TableName=TABLE_NAME,
+            Key={'image_id': {'S': image_id}}
+        )
+        item = resp.get('Item')
+        if item:
+            s3_key = item.get('s3_key', {}).get('S', '')
+            
+            # Case-insensitive prefix evaluation handles upper/lowercase paths safely
+            if not s3_key.lower().startswith(folder_prefix.lower()):
+                logger.warning(f"Asset {image_id} found but belongs to path {s3_key}, which doesn't match expected prefix {folder_prefix}")
+                return None
+                
+            return {
+                'id': item.get('image_id', {}).get('S', ''),
+                's3_key': s3_key,
+                'reference': item.get('reference', {}).get('S', ''),
+                'verse_text': item.get('verse_text', {}).get('S', '')
+            }
+    except Exception as e:
+        logger.error(f"Failed direct target item lookup query on ID [{image_id}]: {str(e)}")
+    return None
 
 def lambda_handler(event, context):
     global image_cache
     
     if event.get('warmer'):
-        logger.info("Warmer pulse received.")
+        logger.info("Warmer pulse processed.")
         return {'statusCode': 200, 'body': 'warmed'}
 
     try:
@@ -62,55 +109,68 @@ def lambda_handler(event, context):
         folder_prefix = "telugu/" if is_telugu else "english/"
 
         # --- DYNAMIC DOMAIN EXTRACTION ---
-        # Pulls 'verstantly.com' or 'ajaybetham.com' straight from the HTTP request headers
         headers = event.get('headers', {}) or {}
         domain = headers.get('host', 'verstantly.com') 
         base_url = f"https://{domain}"
 
-        # --- 302 STATIC REDIRECTS (Synchronized with exact S3 names) ---
-        if clean_path in ["favicon.ico", "apple-touch-icon.png", "logo.png", "home-preview.jpg", "home-preview-telugu.jpg"]:
+        # --- 302 STATIC REDIRECTS ---
+        if clean_path.lower() in ["favicon.ico", "apple-touch-icon.png", "logo.png", "home-preview.jpg", "home-preview-telugu.jpg"]:
             return {'statusCode': 302, 'headers': {'Location': f"{S3_DIRECT_URL}/{clean_path}"}, 'body': ''}
 
         query_params = event.get('queryStringParameters', {}) or {}
         if query_params.get('refresh') == 'true':
-            image_cache = {'telugu': {'keys': [], 'last_updated': 0}, 'english': {'keys': [], 'last_updated': 0}}
+            image_cache = {'telugu': {'items': [], 'last_updated': 0}, 'english': {'items': [], 'last_updated': 0}}
 
-        try:
-            url_idx = query_params.get('idx')
-            url_idx = int(url_idx) if url_idx is not None else None
-        except ValueError:
-            url_idx = None
-
-        display_title = "Verse.Instantly.Constantly"
+        # Look up by explicit unique string id instead of mathematical array indexes
+        url_id = query_params.get('id')
         
-        # --- CRAWLER LINK POINTERS (Synchronized with exact S3 names) ---
-        if url_idx is None:
+        # --- DYNAMIC SEO & META DEFINITIONS ---
+        if not url_id:
+            display_title = "Verse.Instantly.Constantly"
+            display_desc = "Daily scriptural meditation and verses delivered instantly. Stay spiritually refreshed and connected to the Word, constantly."
             social_img_path = f"{S3_DIRECT_URL}/home-preview-telugu.jpg?wspreview=1" if is_telugu else f"{S3_DIRECT_URL}/home-preview.jpg?wspreview=1"
-            images = get_sorted_images(folder_prefix)
+            images = get_cached_db_assets(folder_prefix)
         else:
-            images = get_sorted_images(folder_prefix)
-            if images:
-                meta_index = url_idx % len(images)
-                social_img_path = f"{S3_DIRECT_URL}/{images[meta_index]}?wspreview=1"
+            images = get_cached_db_assets(folder_prefix)
+            # Enforce strict validation via prefix check
+            target_asset = get_single_db_asset(url_id, folder_prefix)
+            if target_asset:
+                social_img_path = f"{CLOUDFRONT_BASE}/{target_asset['s3_key']}?wspreview=1"
+                
+                # Dynamic mapping: use reference for title, fallback to default branding if blank
+                if target_asset.get('reference') and target_asset['reference'].strip():
+                    display_title = target_asset['reference']
+                else:
+                    display_title = "Verse.Instantly.Constantly"
+                
+                # Dynamic mapping: use verse_text for description, fallback to default generic description if blank
+                if target_asset.get('verse_text') and target_asset['verse_text'].strip():
+                    display_desc = target_asset['verse_text']
+                else:
+                    display_desc = "Daily scriptural meditation and verses delivered instantly."
             else:
-                social_img_path = f"{S3_DIRECT_URL}/logo.png"
+                # Fallback parameters if target ID is invalid or missing entirely from DB
+                display_title = "Verse.Instantly.Constantly"
+                display_desc = "Daily scriptural meditation and verses delivered instantly. Stay spiritually refreshed and connected to the Word, constantly."
+                social_img_path = f"{S3_DIRECT_URL}/home-preview-telugu.jpg?wspreview=1" if is_telugu else f"{S3_DIRECT_URL}/home-preview.jpg?wspreview=1"
 
+        # HTML Framework Buildout
         h = f'<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">'
         
-        # OPEN GRAPH TAGS (Dynamically bound to active handling host)
+        # OPEN GRAPH TAGS (Perfect static links for messaging platforms)
         h += f'<meta property="og:title" content="{display_title}">'
         h += f'<meta property="og:image" content="{social_img_path}">'
         h += f'<meta property="og:image:type" content="image/jpeg">'
         h += f'<meta property="og:image:width" content="1200">'
         h += f'<meta property="og:image:height" content="630">'
-        h += f'<meta property="og:url" content="{base_url}/{clean_path}">'
+        h += f'<meta property="og:url" content="{base_url}/{clean_path}?id={url_id if url_id else ""}">'
         h += f'<meta property="og:type" content="website">'
-        h += f'<meta property="og:description" content="Daily scriptural meditation and verses delivered instantly. Stay spiritually refreshed and connected to the Word, constantly.">'
+        h += f'<meta property="og:description" content="{display_desc}">'
         
         h += f'<title>{display_title}</title><link rel="icon" href="/favicon.ico">'
         h += '<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;700&family=Noto+Sans+Telugu:wght@400;700&display=swap" rel="stylesheet">'
         
-        # STYLING
+        # CSS STYLING
         h += '<style>'
         h += 'body { display: flex; flex-direction: column; align-items: center; min-height: 100vh; margin: 0; background: #0f172a; font-family: "Inter", sans-serif; color: white; padding-bottom: 60px; box-sizing: border-box; -webkit-user-select: none; user-select: none; }'
         h += '.header-container { display: flex; flex-direction: column; align-items: center; width: 100%; max-width: 935px; padding: 60px 20px 40px 20px; box-sizing: border-box; text-align: center; }'
@@ -131,15 +191,13 @@ def lambda_handler(event, context):
         h += '.grid-item:hover { transform: scale(1.02); border-color: rgba(56, 189, 248, 0.5); box-shadow: 0 12px 24px rgba(0,0,0,0.3); }'
         h += '.grid-item img { position: absolute; top: 0; left: 0; width: 100%; height: 100%; object-fit: cover; -webkit-user-drag: none; -webkit-touch-callout: none; }'
         
-        # LIGHTBOX MODAL
+        # LIGHTBOX MODAL & INTERACTION SHIELDS
         h += '.lightbox { display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(15, 23, 42, 0.95); backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px); z-index: 200; align-items: center; justify-content: center; opacity: 0; transition: opacity 0.3s ease; touch-action: none; }'
         h += '.lightbox.show { display: flex; opacity: 1; }'
-        
         h += '.lightbox-content { position: relative; max-width: 90vw; max-height: 85vh; display: flex; flex-direction: column; align-items: center; transition: transform 0.2s ease; }'
         h += '.img-frame { position: relative; display: inline-flex; max-width: 100%; max-height: 65vh; }'
         h += '.lightbox-img { max-width: 100%; max-height: 65vh; border-radius: 16px; box-shadow: 0 25px 50px -12px rgba(0,0,0,0.5); border: 1px solid rgba(255,255,255,0.1); object-fit: contain; user-select: none; -webkit-user-select: none; -webkit-user-drag: none; -webkit-touch-callout: none; }'
         h += '.protection-shield { position: absolute; top: 0; left: 0; width: 100%; height: 100%; z-index: 202; background: transparent; -webkit-touch-callout: none; }'
-        
         h += '.watermark-overlay { position: absolute; bottom: 16px; left: 50%; transform: translateX(-50%); width: 45px; height: 45px; opacity: 0.65; pointer-events: none; z-index: 205; filter: drop-shadow(0px 2px 4px rgba(0,0,0,0.5)); }'
         h += '.watermark-overlay img { width: 100%; height: 100%; object-fit: contain; }'
         
@@ -180,16 +238,19 @@ def lambda_handler(event, context):
         h += '</div>'
         h += '<div class="divider"></div>'
         
+        # RENDERING GALLERY TILES USING CLOUDFRONT + DYNAMODB METADATA OBJECT PROPERTIES
         h += '<div class="gallery-grid">'
-        js_img_urls = []
-        for idx, img_key in enumerate(images):
-            thumb_url = f"{S3_DIRECT_URL}/{img_key}"
-            js_img_urls.append(thumb_url)
-            h += f'<div class="grid-item" id="thumb-{idx}" onclick="openLightbox({idx})">'
-            h += f'<img src="{thumb_url}" loading="lazy" alt="Verse Asset">'
+        client_js_array = []
+        for idx, img in enumerate(images):
+            full_cf_url = f"{CLOUDFRONT_BASE}/{img['s3_key']}"
+            client_js_array.append({'id': img['id'], 'url': full_cf_url})
+            
+            h += f'<div class="grid-item" id="tile-{img["id"]}" onclick="openLightbox({idx})">'
+            h += f'<img src="{full_cf_url}" loading="lazy" alt="Verse Asset">'
             h += '</div>'
         h += '</div>'
         
+        # LIGHTBOX INJECTION LAYOUT
         h += '<div id="lightbox" class="lightbox" onclick="closeLightbox()">'
         h += '  <div id="lbContent" class="lightbox-content" onclick="event.stopPropagation()">'
         h += '    <div class="img-frame">'
@@ -214,8 +275,9 @@ def lambda_handler(event, context):
         h += '  </div>'
         h += '</div>'
         
+        # FRONTEND ROUTER SCRIPTS
         h += ' <script>const m=document.getElementById("subM"), lb=document.getElementById("lightbox"), lbImg=document.getElementById("lightbox-img"), lbContent=document.getElementById("lbContent");'
-        h += f'const allUrls = {json.dumps(js_img_urls)};'
+        h += f'const metadataVault = {json.dumps(client_js_array)};'
         h += 'let activeIdx = null;'
         h += 'let startY = 0, currentY = 0, isDragging = false;'
         
@@ -223,12 +285,14 @@ def lambda_handler(event, context):
         h += 'function closeM(){ m.style.display="none"; }'
         h += 'async function sub(){ const e=document.getElementById("uE"),b=document.getElementById("sBtn"); if(!e.value.includes("@"))return alert("Valid email please!"); b.disabled=true; b.innerText="..."; try{ await fetch("' + SUBSCRIBER_URL + '",{method:"POST",mode:"no-cors",body:JSON.stringify({email:e.value.trim()})}); alert("Subscribed! Be Refreshed."); e.value=""; closeM(); }catch(err){ alert("Subscribed!"); closeM(); } b.disabled=false; b.innerText="Be Refreshed"; }'
         
+        # Open Lightbox using standard relative arrays but push unique IDs directly into the active URL parameter structure
         h += 'function openLightbox(index) {'
         h += '  activeIdx = index;'
-        h += '  lbImg.src = allUrls[index];'
+        h += '  lbImg.src = metadataVault[index].url;'
         h += '  lb.classList.add("show");'
         h += '  lbContent.style.transform = "translateY(0)";'
-        h += '  const cleanUrl = window.location.protocol + "//" + window.location.host + window.location.pathname + "?idx=" + index;'
+        h += '  const targetId = metadataVault[index].id;'
+        h += '  const cleanUrl = window.location.protocol + "//" + window.location.host + window.location.pathname + "?id=" + targetId;'
         h += '  window.history.replaceState({path:cleanUrl}, "", cleanUrl);'
         h += '}'
         
@@ -240,25 +304,25 @@ def lambda_handler(event, context):
         h += '}'
         
         h += 'function nextAsset() {'
-        h += '  if(activeIdx === null || allUrls.length === 0) return;'
-        h += '  let nextIdx = (activeIdx + 1) % allUrls.length;'
+        h += '  if(activeIdx === null || metadataVault.length === 0) return;'
+        h += '  let nextIdx = (activeIdx + 1) % metadataVault.length;'
         h += '  openLightbox(nextIdx);'
         h += '}'
         
         h += 'function prevAsset() {'
-        h += '  if(activeIdx === null || allUrls.length === 0) return;'
-        h += '  let prevIdx = (activeIdx - 1 + allUrls.length) % allUrls.length;'
+        h += '  if(activeIdx === null || metadataVault.length === 0) return;'
+        h += '  let prevIdx = (activeIdx - 1 + metadataVault.length) % metadataVault.length;'
         h += '  openLightbox(prevIdx);'
         h += '}'
         
         h += 'function shareCurrentAsset(){'
         h += '  if(activeIdx === null) return;'
-        h += '  const shareUrl = window.location.origin + window.location.pathname + "?idx=" + activeIdx;'
+        h += '  const shareUrl = window.location.origin + window.location.pathname + "?id=" + metadataVault[activeIdx].id;'
         h += '  if(navigator.share){'
         h += '    navigator.share({title: document.title, url: shareUrl});'
         h += '  } else {'
         h += '    navigator.clipboard.writeText(shareUrl);'
-        h += '    alert("Link to this specific verse copied!");'
+        h += '    alert("Permanent link to this specific verse copied!");'
         h += '  }'
         h += '}'
         
@@ -270,7 +334,7 @@ def lambda_handler(event, context):
         document_event_listeners += '});'
         h += document_event_listeners
         
-        # --- TOUCH INTERACTION ZONE (Vertical to close, Horizontal to swipe) ---
+        # TOUCH LAYER GESTURES
         h += 'let startX = 0, currentX = 0;'
         h += 'lb.addEventListener("touchstart", e => { startY = e.touches[0].clientY; startX = e.touches[0].clientX; isDragging = true; }, {passive: true});'
         h += 'lb.addEventListener("touchmove", e => {'
@@ -293,8 +357,14 @@ def lambda_handler(event, context):
         
         h += 'document.addEventListener("contextmenu", e => e.preventDefault());'
         
-        initial_deep_idx = f"{url_idx}" if url_idx is not None else "null"
-        h += f'window.onload = () => {{ if ({initial_deep_idx} !== null && {initial_deep_idx} < allUrls.length) {{ openLightbox({initial_deep_idx}); }} }};'
+        # DEEP-LINK INITIALIZATION RESOLVER (Locates index pointer matching URL image_id string token)
+        h += f'const initialUrlId = "{url_id if url_id else ""}";'
+        h += 'window.onload = () => {';
+        h += '  if (initialUrlId) {'
+        h += '    const matchedIndex = metadataVault.findIndex(item => item.id.toLowerCase() === initialUrlId.toLowerCase());'
+        h += '    if (matchedIndex !== -1) { openLightbox(matchedIndex); }'
+        h += '  }'
+        h += '};'
         
         h += '</script></body></html>'
 
