@@ -22,11 +22,13 @@
                     <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path></svg>
                 </button>
                 
-                <div class="max-w-full max-h-[75vh] flex items-center justify-center bg-black/40 rounded-xl overflow-hidden shadow-2xl border border-white/10 p-2">
-                    <img id="modal-image-view" src="" class="max-w-full max-h-[72vh] object-contain rounded-md" alt="High resolution target view">
+                <div class="max-w-full max-h-[75vh] flex items-center justify-center bg-black/40 rounded-xl overflow-hidden shadow-2xl border border-white/10 p-2 relative">
+                    <img id="modal-image-view" src="" class="max-w-full max-h-[72vh] object-contain rounded-md select-none" alt="High resolution target view" onerror="handleImageLoadError(this)" oncontextmenu="return false;" ondragstart="return false;">
+                    
+                    <div class="absolute inset-0 z-10 bg-transparent select-none" oncontextmenu="return false;" ondragstart="return false;"></div>
                 </div>
 
-                <div class="mt-4 bg-white/90 backdrop-blur text-slate-900 px-6 py-2 rounded-full text-center max-w-xl font-medium shadow-md text-xs font-mono truncate">
+                <div class="mt-4 bg-white/90 backdrop-blur text-slate-900 px-6 py-2 rounded-full text-center max-w-xl font-medium shadow-md text-xs font-mono truncate z-20">
                     <span id="modal-reference-view"></span>
                 </div>
             </div>
@@ -61,6 +63,29 @@
             isSaving: false
         };
 
+        // Case-Insensitive URL Fallback Strategy
+        window.handleImageLoadError = function(imgElement) {
+            if (imgElement.getAttribute('data-fallback-attempted') === 'true') {
+                imgElement.src = 'https://placehold.co/300x200?text=Asset+Not+Found';
+                return;
+            }
+
+            imgElement.setAttribute('data-fallback-attempted', 'true');
+            const originalSrc = imgElement.src;
+
+            if (originalSrc.endsWith('.JPG')) {
+                imgElement.src = originalSrc.replace(/\.JPG$/, '.jpg');
+            } else if (originalSrc.endsWith('.jpg')) {
+                imgElement.src = originalSrc.replace(/\.jpg$/, '.JPG');
+            } else if (originalSrc.endsWith('.JPEG')) {
+                imgElement.src = originalSrc.replace(/\.JPEG$/, '.jpeg');
+            } else if (originalSrc.endsWith('.jpeg')) {
+                imgElement.src = originalSrc.replace(/\.jpeg$/, '.JPEG');
+            } else {
+                imgElement.src = 'https://placehold.co/300x200?text=S3+Asset+Pending';
+            }
+        };
+
         // 1. Load initial dataset from AWS
         async function loadGallery() {
             try {
@@ -75,7 +100,7 @@
             }
         }
 
-        // 2. Render the grid of image cards using CloudFront paths
+        // 2. Render the grid of image cards using CloudFront paths (Protected using Option 1 & 2)
         function renderGrid() {
             const grid = document.getElementById('image-grid');
             if (appState.images.length === 0) {
@@ -88,8 +113,14 @@
                 return `
                     <div onclick="selectImage('${img.image_id}')" 
                          class="cursor-pointer bg-white rounded-xl overflow-hidden shadow-sm border-2 transition-all hover:scale-[1.01] ${isSelected ? 'border-blue-600 ring-2 ring-blue-100' : 'border-slate-200'}">
-                        <div class="aspect-video bg-slate-200 relative overflow-hidden">
-                            <img src="https://${CLOUDFRONT_DOMAIN}/${img.s3_key}" class="w-full h-full object-cover" onerror="this.src='https://placehold.co/300x200?text=S3+Asset+Pending'">
+                        <div class="aspect-video bg-slate-200 relative overflow-hidden select-none">
+                            <img src="https://${CLOUDFRONT_DOMAIN}/${img.s3_key}" 
+                                 class="w-full h-full object-cover select-none pointer-events-none" 
+                                 onerror="handleImageLoadError(this)"
+                                 oncontextmenu="return false;"
+                                 ondragstart="return false;">
+                            
+                            <div class="absolute inset-0 z-10 bg-transparent select-none" oncontextmenu="return false;" ondragstart="return false;"></div>
                         </div>
                         <div class="p-3">
                             <p class="text-xs font-mono font-bold text-slate-700 truncate">${img.current_filename}</p>
@@ -107,8 +138,10 @@
             renderGrid();
             renderForm();
             
-            // Populate and showcase the overlay limited strictly to the left partition workspace
-            document.getElementById('modal-image-view').src = `https://${CLOUDFRONT_DOMAIN}/${img.s3_key}`;
+            const modalImg = document.getElementById('modal-image-view');
+            modalImg.removeAttribute('data-fallback-attempted'); 
+            modalImg.src = `https://${CLOUDFRONT_DOMAIN}/${img.s3_key}`;
+            
             document.getElementById('modal-reference-view').innerText = img.reference ? `PATH: ${img.s3_key} (${img.reference})` : `PATH: ${img.s3_key}`;
             document.getElementById('preview-modal').classList.remove('hidden');
         };
@@ -200,7 +233,6 @@
                     appState.selectedImage = result.data;
                     renderGrid();
 
-                    // Instantly sync up the string description under the popped-out view
                     document.getElementById('modal-reference-view').innerText = result.data.reference ? `PATH: ${result.data.s3_key} (${result.data.reference})` : `PATH: ${result.data.s3_key}`;
                 } else {
                     alertBox.className = "p-3 rounded-lg text-xs font-medium bg-red-50 text-red-700 border border-red-200 block";
