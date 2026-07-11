@@ -1,311 +1,493 @@
-import { S3Client, ListObjectsV2Command, HeadObjectCommand, CopyObjectCommand, DeleteObjectCommand } from "@aws-sdk/client-s3";
-import { DynamoDBClient, ScanCommand, PutItemCommand, UpdateItemCommand } from "@aws-sdk/client-dynamodb";
+import json
+import boto3
+import logging
+import time
+import base64
+from botocore.config import Config
 
-const s3 = new S3Client({});
-const dynamo = new DynamoDBClient({});
+# --- GLOBAL INITIALIZATION ---
+logger = logging.getLogger()
+logger.setLevel(logging.INFO)
 
-const TABLE_NAME = "verstantly-verse-images";
-const BUCKET_NAME = "ajaybetham-sta";
+# --- CONFIGURATION ---
+BUCKET_NAME = 'ajaybetham-sta'
+TABLE_NAME = 'verstantly-verse-images'
+REGION = 'us-east-1'
+CLOUDFRONT_DOMAIN = 'd15si3zl564vcw.cloudfront.net'
+CLOUDFRONT_BASE = f"https://{CLOUDFRONT_DOMAIN}"
+S3_DIRECT_URL = f"https://{BUCKET_NAME}.s3.{REGION}.amazonaws.com"
+SUBSCRIBER_URL = "https://dpqshmdcgoahjdfxae56f65evy0ohfvl.lambda-url.us-east-1.on.aws/"
 
-export const handler = async (event) => {
-    let path = event.rawPath || event.requestContext?.http?.path || event.path || "/";
-    let httpMethod = event.requestContext?.http?.method || event.httpMethod || "GET";
+# Low-latency client tuning config
+dynamo_config = Config(retries={'max_attempts': 2}, tcp_keepalive=True, max_pool_connections=50)
+dynamo_client = boto3.client('dynamodb', region_name=REGION, config=dynamo_config)
 
-    const corsHeaders = {
-        "Access-Control-Allow-Origin": "*",
-        "Access-Control-Allow-Methods": "GET,PUT,POST,OPTIONS",
-        "Access-Control-Allow-Headers": "Content-Type"
-    };
+# Global in-memory structured cache supporting 3 languages
+image_cache = {
+    'english': {'items': [], 'last_updated': 0},
+    'telugu': {'items': [], 'last_updated': 0},
+    'tamil': {'items': [], 'last_updated': 0}
+}
+CACHE_TTL_SECONDS = 300  # 5-minute global cache window
 
-    if (httpMethod === "OPTIONS") {
-        return { statusCode: 200, headers: corsHeaders, body: "" };
-    }
-
-    try {
-        // ==========================================
-        // ROUTE: REAL-TIME INVENTORY LANGUAGE COUNTS
-        // ==========================================
-        if (httpMethod === "GET" && path.includes("/images/counts")) {
-            const s3Response = await s3.send(new ListObjectsV2Command({ Bucket: BUCKET_NAME }));
-            const s3Objects = s3Response.Contents || [];
-
-            let english = 0;
-            let telugu = 0;
-            let tamil = 0;
-
-            s3Objects.forEach(obj => {
-                if (obj.Key.endsWith('/')) return;
-                const lowerKey = obj.Key.toLowerCase();
-                
-                if (lowerKey.startsWith('telugu/')) {
-                    telugu++;
-                } else if (lowerKey.startsWith('tamil/')) {
-                    tamil++;
-                } else if (lowerKey.startsWith('english/') || !lowerKey.includes('/')) {
-                    english++;
-                }
-            });
-
-            return {
-                statusCode: 200,
-                headers: { "Content-Type": "application/json", ...corsHeaders },
-                body: JSON.stringify({ english, telugu, tamil })
-            };
-        }
-
-        // ==========================================
-        // ROUTE 1: FETCH IMAGES & AUTO-SYNC S3 (SORTED BY VIEWS DESCENDING)
-        // ==========================================
-        if (httpMethod === "GET" && path.includes("/images") && !path.includes("/update") && !path.includes("/counts") && !path.includes("/view")) {
-            const s3Response = await s3.send(new ListObjectsV2Command({ Bucket: BUCKET_NAME }));
-            const s3Objects = s3Response.Contents || [];
-
-            const dbResponse = await dynamo.send(new ScanCommand({ TableName: TABLE_NAME }));
-            const dbItems = dbResponse.Items || [];
+def get_cached_db_assets(folder_prefix):
+    """
+    Pulls normalized library documents directly from DynamoDB instead of scanning raw S3 storage keys.
+    Separates assets into Language groups based on the folder path segment prefix mapping.
+    """
+    global image_cache
+    current_time = time.time()
+    
+    # Map cache key identifier from folder prefix safely
+    if folder_prefix == "telugu/":
+        cache_key = 'telugu'
+    elif folder_prefix == "tamil/":
+        cache_key = 'tamil'
+    else:
+        cache_key = 'english'
+    
+    if not image_cache[cache_key]['items'] or (current_time - image_cache[cache_key]['last_updated'] > CACHE_TTL_SECONDS):
+        logger.info(f"Database layout cache stale for category [{cache_key}]. Re-indexing from DynamoDB table...")
+        try:
+            # High performance bulk acquisition
+            paginator = dynamo_client.get_paginator('scan')
+            db_items = []
+            for page in paginator.paginate(TableName=TABLE_NAME):
+                db_items.extend(page.get('Items', []))
             
-            const dbMap = new Map();
-            dbItems.forEach(item => {
-                if (item.s3_key?.S) dbMap.set(item.s3_key.S, item);
-            });
+            filtered_group = []
+            for item in db_items:
+                s3_key = item.get('s3_key', {}).get('S', '')
+                # Case-insensitive folder segment check to ensure variations match properly
+                if s3_key.lower().startswith(folder_prefix.lower()):
+                    
+                    # --- HYBRID TIMESTAMP RESOLVER ---
+                    # Checks dynamically for Number (N) or String (S) data types across common fields
+                    raw_ts = (
+                        item.get('created_at', {}).get('S') or 
+                        item.get('created_at', {}).get('N') or 
+                        item.get('timestamp', {}).get('N') or 
+                        item.get('timestamp', {}).get('S') or 
+                        item.get('date', {}).get('S') or 
+                        ''
+                    )
+                    
+                    filtered_group.append({
+                        'id': item.get('image_id', {}).get('S', ''),
+                        's3_key': s3_key, # Preserve original casing for S3 direct targeting
+                        'reference': item.get('reference', {}).get('S', ''),
+                        'verse_text': item.get('verse_text', {}).get('S', ''),
+                        'sort_value': raw_ts
+                    })
+            
+            # SORT LOGIC UPDATE: Evaluate by sort_value. Cascades gracefully to ID/S3 Key alphanumeric chains if dates are missing.
+            filtered_group.sort(key=lambda x: (x['sort_value'], x['id'], x['s3_key']), reverse=True)
+            image_cache[cache_key] = {'items': filtered_group, 'last_updated': current_time}
+        except Exception as e:
+            logger.error(f"Error executing synchronous cache compilation: {str(e)}")
+            
+    return image_cache[cache_key]['items']
 
-            const finalImages = [];
-
-            for (const obj of s3Objects) {
-                if (obj.Key.endsWith('/')) continue; 
-
-                let targetKey = obj.Key;
+def get_single_db_asset(image_id, folder_prefix):
+    """
+    Executes a direct Key lookup and strictly verifies it belongs 
+    to the active language folder prefix.
+    """
+    try:
+        resp = dynamo_client.get_item(
+            TableName=TABLE_NAME,
+            Key={'image_id': {'S': image_id}}
+        )
+        item = resp.get('Item')
+        if item:
+            s3_key = item.get('s3_key', {}).get('S', '')
+            
+            # Case-insensitive prefix evaluation handles upper/lowercase paths safely
+            if not s3_key.lower().startswith(folder_prefix.lower()):
+                logger.warning(f"Asset {image_id} found but belongs to path {s3_key}, which doesn't match expected prefix {folder_prefix}")
+                return None
                 
-                const s3EpochTimestamp = obj.LastModified 
-                    ? Math.floor(new Date(obj.LastModified).getTime() / 1000).toString() 
-                    : Math.floor(Date.now() / 1000).toString();
-
-                if (targetKey.endsWith('.JPG') || targetKey.endsWith('.JPEG')) {
-                    const lowCaseKey = targetKey.replace(/\.JPG$/, '.jpg').replace(/\.JPEG$/, '.jpeg');
-                    
-                    try {
-                        await s3.send(new CopyObjectCommand({
-                            Bucket: BUCKET_NAME,
-                            CopySource: `${BUCKET_NAME}/${targetKey}`,
-                            Key: lowCaseKey
-                        }));
-                        await s3.send(new DeleteObjectCommand({ Bucket: BUCKET_NAME, Key: targetKey }));
-                        
-                        targetKey = lowCaseKey; 
-                        console.log(`Successfully normalized asset file path capitalization structure from [${obj.Key}] to [${targetKey}]`);
-                    } catch (renameErr) {
-                        console.error(`Failed executing systemic case mutation routine transformation for key sequence: ${obj.Key}`, renameErr);
-                    }
-                }
-
-                if (dbMap.has(targetKey)) {
-                    const matchedItem = dbMap.get(targetKey);
-                    const existingId = matchedItem.image_id?.S || "";
-                    
-                    if (!matchedItem.created_at || !matchedItem.created_at.S) {
-                        console.log(`Backfilling missing created_at timestamp (${s3EpochTimestamp}) for existing asset: ${existingId}`);
-                        try {
-                            await dynamo.send(new UpdateItemCommand({
-                                TableName: TABLE_NAME,
-                                Key: { "image_id": { S: existingId } },
-                                UpdateExpression: "SET #cat = :c",
-                                ExpressionAttributeNames: { "#cat": "created_at" },
-                                ExpressionAttributeValues: { ":c": { S: s3EpochTimestamp } }
-                            }));
-                            matchedItem.created_at = { S: s3EpochTimestamp };
-                        } catch (updateErr) {
-                            console.error(`Failed backfilling timestamp for ID ${existingId}:`, updateErr);
-                        }
-                    }
-
-                    finalImages.push({
-                        image_id: existingId,
-                        s3_key: targetKey,
-                        current_filename: matchedItem.current_filename?.S || targetKey.split('/').pop(),
-                        reference: matchedItem.reference?.S || "",
-                        verse_text: matchedItem.verse_text?.S || "",
-                        created_at: matchedItem.created_at?.S || s3EpochTimestamp,
-                        views: matchedItem.views?.N ? parseInt(matchedItem.views.N, 10) : 0
-                    });
-                } else {
-                    const newId = `img_${Math.random().toString(36).substring(2, 9)}`;
-                    const fileName = targetKey.split('/').pop();
-
-                    await dynamo.send(new PutItemCommand({
-                        TableName: TABLE_NAME,
-                        Item: {
-                            "image_id": { S: newId },
-                            "s3_key": { S: targetKey },
-                            "current_filename": { S: fileName },
-                            "reference": { S: "" },
-                            "verse_text": { S: "" },
-                            "created_at": { S: s3EpochTimestamp }
-                        }
-                    }));
-
-                    finalImages.push({
-                        image_id: newId,
-                        s3_key: targetKey,
-                        current_filename: fileName,
-                        reference: "",
-                        verse_text: "",
-                        created_at: s3EpochTimestamp,
-                        views: 0
-                    });
-                }
-            }
-
-            // --- POPULARITY ENGINE SORT ---
-            // Re-orders assets descending so files with maximum views land on top. 
-            // Falls back to creation date comparison if views numbers tie.
-            finalImages.sort((a, b) => {
-                if (b.views !== a.views) {
-                    return b.views - a.views;
-                }
-                return parseInt(b.created_at, 10) - parseInt(a.created_at, 10);
-            });
-
             return {
-                statusCode: 200,
-                headers: { "Content-Type": "application/json", ...corsHeaders },
-                body: JSON.stringify({ images: finalImages })
-            };
-        }
+                'id': item.get('image_id', {}).get('S', ''),
+                's3_key': s3_key,
+                'reference': item.get('reference', {}).get('S', ''),
+                'verse_text': item.get('verse_text', {}).get('S', '')
+            }
+    except Exception as e:
+        logger.error(f"Failed direct target item lookup query on ID [{image_id}]: {str(e)}")
+    return None
 
-        // ==========================================
-        // ROUTE 2: UPDATE METADATA & SAFE S3 RENAME
-        // ==========================================
-        if (httpMethod === "PUT" && path.includes("/images/update")) {
-            const body = JSON.parse(event.body || "{}");
-            const { image_id, s3_key, reference, verse_text, requested_filename } = body;
+def lambda_handler(event, context):
+    global image_cache
+    
+    if event.get('warmer'):
+        logger.info("Warmer pulse processed.")
+        return {'statusCode': 200, 'body': 'warmed'}
 
-            if (!image_id || !s3_key) {
+    try:
+        path = event.get('rawPath', event.get('path', '/'))
+        clean_path = path.strip('/').lower()
+        
+        # --- BACKGROUND ANALYTICS VIEW METRIC ROUTER ---
+        # Intercepts POST requests explicitly routed to target tracking endpoints
+        if clean_path == "increment-view":
+            try:
+                # SAFELY EXTRACT BODY (Handles raw text, proxy objects, and Function URL Base64 strings)
+                raw_body = event.get('body', '{}') or '{}'
+                if event.get('isBase64Encoded', False):
+                    raw_body = base64.b64decode(raw_body).decode('utf-8')
+                
+                body = json.loads(raw_body)
+                image_id = body.get('image_id')
+                
+                if image_id:
+                    # NORMALIZATION: Force string target to lowercase to strictly match database key properties
+                    normalized_id = image_id.strip().lower()
+                    logger.info(f"Incrementing metrics view count for sanitized asset ID: {normalized_id}")
+                    
+                    # FIXED: Using ExpressionAttributeNames ('#v') to escape the 'views' reserved keyword conflict
+                    dynamo_client.update_item(
+                        TableName=TABLE_NAME,
+                        Key={'image_id': {'S': normalized_id}},
+                        UpdateExpression="SET #v = if_not_exists(#v, :zero) + :inc",
+                        ExpressionAttributeNames={
+                            '#v': 'views'
+                        },
+                        ExpressionAttributeValues={
+                            ':zero': {'N': '0'},
+                            ':inc': {'N': '1'}
+                        }
+                    )
                 return {
-                    statusCode: 400,
-                    headers: { "Content-Type": "application/json", ...corsHeaders },
-                    body: JSON.stringify({ success: false, message: "Missing image_id or s3_key validation properties." })
-                };
-            }
-
-            let finalS3Key = s3_key;
-            let finalFileName = requested_filename;
-            const currentFileName = s3_key.split('/').pop();
-
-            if (finalFileName && (finalFileName.endsWith('.JPG') || finalFileName.endsWith('.JPEG'))) {
-                finalFileName = finalFileName.replace(/\.JPG$/, '.jpg').replace(/\.JPEG$/, '.jpeg');
-            }
-
-            if (finalFileName && finalFileName !== currentFileName) {
-                const extIndex = finalFileName.lastIndexOf('.');
-                const baseName = extIndex !== -1 ? finalFileName.substring(0, extIndex) : finalFileName;
-                const fileExt = extIndex !== -1 ? finalFileName.substring(extIndex) : '';
-
-                const pathSegments = s3_key.split('/');
-                pathSegments.pop();
-                const folderPrefix = pathSegments.length > 0 ? pathSegments.join('/') + '/' : '';
-
-                let suffixCounter = 0;
-                let isCollision = true;
-
-                while (isCollision) {
-                    const testFileName = suffixCounter === 0 
-                        ? `${baseName}${fileExt}` 
-                        : `${baseName}_${suffixCounter}${fileExt}`;
-                    
-                    const testS3Key = `${folderPrefix}${testFileName}`;
-
-                    try {
-                        await s3.send(new HeadObjectCommand({ Bucket: BUCKET_NAME, Key: testS3Key }));
-                        suffixCounter++; 
-                    } catch (s3Error) {
-                        if (s3Error.name === "NotFound" || s3Error.$metadata?.httpStatusCode === 404) {
-                            finalS3Key = testS3Key;
-                            finalFileName = testFileName;
-                            isCollision = false; 
-                        } else {
-                            throw s3Error; 
-                        }
-                    }
+                    'statusCode': 200, 
+                    'headers': {
+                        'Content-Type': 'application/json',
+                        'Access-Control-Allow-Origin': '*',
+                        'Access-Control-Allow-Methods': 'POST,OPTIONS',
+                        'Access-Control-Allow-Headers': 'Content-Type'
+                    }, 
+                    'body': json.dumps({'success': True})
                 }
-
-                await s3.send(new CopyObjectCommand({
-                    Bucket: BUCKET_NAME,
-                    CopySource: `${BUCKET_NAME}/${s3_key}`,
-                    Key: finalS3Key
-                }));
-
-                await s3.send(new DeleteObjectCommand({ Bucket: BUCKET_NAME, Key: s3_key }));
-            }
-
-            await dynamo.send(new UpdateItemCommand({
-                TableName: TABLE_NAME,
-                Key: { "image_id": { S: image_id } },
-                UpdateExpression: "SET #ref = :r, #vxt = :v, #fnm = :f, #s3k = :k",
-                ExpressionAttributeNames: {
-                    "#ref": "reference",
-                    "#vxt": "verse_text",
-                    "#fnm": "current_filename",
-                    "#s3k": "s3_key"
-                },
-                ExpressionAttributeValues: {
-                    ":r": { S: reference || "" },
-                    ":v": { S: verse_text || "" },
-                    ":f": { S: finalFileName || currentFileName },
-                    ":k": { S: finalS3Key }
-                }
-            }));
-
-            return {
-                statusCode: 200,
-                headers: { "Content-Type": "application/json", ...corsHeaders },
-                body: JSON.stringify({
-                    success: true,
-                    data: { image_id, s3_key: finalS3Key, current_filename: finalFileName || currentFileName, reference, verse_text }
-                })
-            };
-        }
-
-        // ==========================================
-        // NEW ROUTE: INCREMENT IMAGE VIEW COUNT
-        // ==========================================
-        if (httpMethod === "POST" && path.includes("/images/view")) {
-            const body = JSON.parse(event.body || "{}");
-            const { image_id } = body;
-
-            if (!image_id) {
+            except Exception as metric_err:
+                logger.error(f"Failed to record background view metric safely: {str(metric_err)}")
+                # Return a structured 200 catch so tracking glitches never freeze the user's lightbox
                 return {
-                    statusCode: 400,
-                    headers: { "Content-Type": "application/json", ...corsHeaders },
-                    body: JSON.stringify({ success: false, message: "Missing image_id." })
-                };
+                    'statusCode': 200,
+                    'headers': {
+                        'Content-Type': 'application/json',
+                        'Access-Control-Allow-Origin': '*'
+                    },
+                    'body': json.dumps({'success': False, 'error': str(metric_err)})
+                }
+
+        # --- LANGUAGE ROUTER MATRIX ---
+        if clean_path == "telugu":
+            lang_mode = "telugu"
+            folder_prefix = "telugu/"
+        elif clean_path == "tamil":
+            lang_mode = "tamil"
+            folder_prefix = "tamil/"
+        else:
+            lang_mode = "english"
+            folder_prefix = "english/"
+
+        # --- DYNAMIC DOMAIN EXTRACTION ---
+        headers = event.get('headers', {}) or {}
+        domain = headers.get('host', 'verstantly.com') 
+        base_url = f"https://{domain}"
+
+        # --- 302 STATIC REDIRECTS ---
+        if clean_path in ["favicon.ico", "apple-touch-icon.png", "logo.png", "home-preview.jpg", "home-preview-telugu.jpg", "home-preview-tamil.jpg"]:
+            return {'statusCode': 302, 'headers': {'Location': f"{S3_DIRECT_URL}/{clean_path}"}, 'body': ''}
+
+        query_params = event.get('queryStringParameters', {}) or {}
+        if query_params.get('refresh') == 'true':
+            image_cache = {
+                'english': {'items': [], 'last_updated': 0},
+                'telugu': {'items': [], 'last_updated': 0},
+                'tamil': {'items': [], 'last_updated': 0}
             }
 
-            await dynamo.send(new UpdateItemCommand({
-                TableName: TABLE_NAME,
-                Key: { "image_id": { S: image_id } },
-                UpdateExpression: "ADD #v :inc",
-                ExpressionAttributeNames: { "#v": "views" },
-                ExpressionAttributeValues: { ":inc": { N: "1" } }
-            }));
+        # Look up by explicit unique string id instead of mathematical array indexes
+        url_id = query_params.get('id')
+        
+        # --- DYNAMIC SEO & META DEFINITIONS ---
+        if not url_id:
+            display_title = "Verse.Instantly.Constantly"
+            display_desc = "Daily scriptural meditation and verses delivered instantly. Stay spiritually refreshed and connected to the Word, constantly."
+            
+            if lang_mode == "telugu":
+                social_img_path = f"{S3_DIRECT_URL}/home-preview-telugu.jpg?wspreview=1"
+            elif lang_mode == "tamil":
+                social_img_path = f"{S3_DIRECT_URL}/home-preview-tamil.jpg?wspreview=1"
+            else:
+                social_img_path = f"{S3_DIRECT_URL}/home-preview.jpg?wspreview=1"
+                
+            images = get_cached_db_assets(folder_prefix)
+        else:
+            images = get_cached_db_assets(folder_prefix)
+            # Enforce strict validation via prefix check
+            target_asset = get_single_db_asset(url_id, folder_prefix)
+            if target_asset:
+                social_img_path = f"{CLOUDFRONT_BASE}/{target_asset['s3_key']}?wspreview=1"
+                
+                # Dynamic mapping: use reference for title, fallback to default branding if blank
+                if target_asset.get('reference') and target_asset['reference'].strip():
+                    display_title = target_asset['reference']
+                else:
+                    display_title = "Verse.Instantly.Constantly"
+                
+                # Dynamic mapping: use verse_text for description, fallback to default generic description if blank
+                if target_asset.get('verse_text') and target_asset['verse_text'].strip():
+                    display_desc = target_asset['verse_text']
+                else:
+                    display_desc = "Daily scriptural meditation and verses delivered instantly."
+            else:
+                # Fallback parameters if target ID is invalid or missing entirely from DB
+                display_title = "Verse.Instantly.Constantly"
+                display_desc = "Daily scriptural meditation and verses delivered instantly. Stay spiritually refreshed and connected to the Word, constantly."
+                if lang_mode == "telugu":
+                    social_img_path = f"{S3_DIRECT_URL}/home-preview-telugu.jpg?wspreview=1"
+                elif lang_mode == "tamil":
+                    social_img_path = f"{S3_DIRECT_URL}/home-preview-tamil.jpg?wspreview=1"
+                else:
+                    social_img_path = f"{S3_DIRECT_URL}/home-preview.jpg?wspreview=1"
 
-            return {
-                statusCode: 200,
-                headers: { "Content-Type": "application/json", ...corsHeaders },
-                body: JSON.stringify({ success: true, message: "View count incremented safely." })
-            };
-        }
+        # HTML Framework Buildout
+        h = f'<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">'
+        
+        # OPEN GRAPH TAGS (Perfect static links for messaging platforms)
+        path_suffix = f"{clean_path}" if clean_path in ["telugu", "tamil"] else ""
+        h += f'<meta property="og:title" content="{display_title}">'
+        h += f'<meta property="og:image" content="{social_img_path}">'
+        h += f'<meta property="og:image:type" content="image/jpeg">'
+        h += f'<meta property="og:image:width" content="1200">'
+        h += f'<meta property="og:image:height" content="630">'
+        h += f'<meta property="og:url" content="{base_url}/{path_suffix}?id={url_id if url_id else ""}">'
+        h += f'<meta property="og:type" content="website">'
+        h += f'<meta property="og:description" content="{display_desc}">'
+        
+        h += f'<title>{display_title}</title><link rel="icon" href="/favicon.ico">'
+        h += '<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;700&family=Noto+Sans+Telugu:wght@400;700&family=Noto+Sans+Tamil:wght@400;700&display=swap" rel="stylesheet">'
+        
+        # CSS STYLING
+        h += '<style>'
+        h += 'body { display: flex; flex-direction: column; align-items: center; min-height: 100vh; margin: 0; background: #0f172a; font-family: "Inter", sans-serif; color: white; padding-bottom: 60px; box-sizing: border-box; -webkit-user-select: none; user-select: none; }'
+        h += '.header-container { display: flex; flex-direction: column; align-items: center; width: 100%; max-width: 935px; padding: 60px 20px 40px 20px; box-sizing: border-box; text-align: center; }'
+        h += '.profile-logo-wrapper { width: 100px; height: 100px; border-radius: 50%; padding: 4px; background: linear-gradient(135deg, #38bdf8, #1e40af); box-shadow: 0 8px 24px rgba(0,0,0,0.3); margin-bottom: 24px; display: flex; align-items: center; justify-content: center; }'
+        h += '.profile-logo { width: 100%; height: 100%; background: #0f172a; border-radius: 50%; display: flex; align-items: center; justify-content: center; overflow: hidden; }'
+        h += '.profile-logo img { width: 65px; height: 65px; object-fit: contain; }'
+        
+        # Language-Specific Header Styling
+        if lang_mode == "telugu":
+            h += '.banner-text { font-family: "Noto Sans Telugu", "Inter", sans-serif; font-size: 20px; font-weight: 400; line-height: 1.8; color: #e2e8f0; max-width: 650px; margin: 0 0 16px 0; letter-spacing: 0.02em; }'
+            h += '.banner-reference { font-family: "Noto Sans Telugu", "Inter", sans-serif; font-size: 14px; font-weight: 700; color: #38bdf8; margin: 0; }'
+        elif lang_mode == "tamil":
+            h += '.banner-text { font-family: "Noto Sans Tamil", "Inter", sans-serif; font-size: 19px; font-weight: 400; line-height: 1.8; color: #e2e8f0; max-width: 650px; margin: 0 0 16px 0; letter-spacing: 0.02em; }'
+            h += '.banner-reference { font-family: "Noto Sans Tamil", "Inter", sans-serif; font-size: 14px; font-weight: 700; color: #38bdf8; margin: 0; }'
+        else:
+            h += '.banner-text { font-size: 18px; font-weight: 400; line-height: 1.6; color: #e2e8f0; max-width: 600px; margin: 0 0 16px 0; font-style: italic; letter-spacing: -0.01em; }'
+            h += '.banner-reference { font-size: 13px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.15em; color: #38bdf8; margin: 0; }'
+            
+        h += '.divider { width: 100%; max-width: 935px; height: 1px; background: rgba(255,255,255,0.1); margin: 0 auto 32px auto; }'
+        h += '.gallery-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 28px; width: 100%; max-width: 935px; padding: 0 20px; box-sizing: border-box; }'
+        h += '.grid-item { position: relative; width: 100%; padding-top: 100%; background: rgba(255,255,255,0.02); border-radius: 12px; overflow: hidden; cursor: pointer; border: 1px solid rgba(255,255,255,0.05); transition: transform 0.25s cubic-bezier(0.4, 0, 0.2, 1), border-color 0.25s; }'
+        h += '.grid-item:hover { transform: scale(1.02); border-color: rgba(56, 189, 248, 0.5); box-shadow: 0 12px 24px rgba(0,0,0,0.3); }'
+        h += '.grid-item img { position: absolute; top: 0; left: 0; width: 100%; height: 100%; object-fit: cover; -webkit-user-drag: none; -webkit-touch-callout: none; }'
+        
+        # LIGHTBOX MODAL & INTERACTION SHIELDS
+        h += '.lightbox { display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(15, 23, 42, 0.95); backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px); z-index: 200; align-items: center; justify-content: center; opacity: 0; transition: opacity 0.3s ease; touch-action: none; }'
+        h += '.lightbox.show { display: flex; opacity: 1; }'
+        h += '.lightbox-content { position: relative; max-width: 90vw; max-height: 85vh; display: flex; flex-direction: column; align-items: center; transition: transform 0.2s ease; }'
+        h += '.img-frame { position: relative; display: inline-flex; max-width: 100%; max-height: 65vh; }'
+        h += '.lightbox-img { max-width: 100%; max-height: 65vh; border-radius: 16px; box-shadow: 0 25px 50px -12px rgba(0,0,0,0.5); border: 1px solid rgba(255,255,255,0.1); object-fit: contain; user-select: none; -webkit-user-select: none; -webkit-user-drag: none; -webkit-touch-callout: none; }'
+        h += '.protection-shield { position: absolute; top: 0; left: 0; width: 100%; height: 100%; z-index: 202; background: transparent; -webkit-touch-callout: none; }'
+        h += '.watermark-overlay { position: absolute; bottom: 16px; left: 50%; transform: translateX(-50%); width: 45px; height: 45px; opacity: 0.65; pointer-events: none; z-index: 205; filter: drop-shadow(0px 2px 4px rgba(0,0,0,0.5)); }'
+        h += '.watermark-overlay img { width: 100%; height: 100%; object-fit: contain; }'
+        
+        h += '.lightbox-actions { display: flex; gap: 24px; margin-top: 24px; z-index: 210; background: rgba(30, 41, 59, 0.6); padding: 8px 24px; border-radius: 30px; border: 1px solid rgba(255,255,255,0.08); backdrop-filter: blur(8px); }'
+        h += '.lightbox-btn { width: 44px; height: 44px; display: flex; justify-content: center; align-items: center; cursor: pointer; transition: 0.25s; color: #94a3b8; }'
+        h += '.lightbox-btn:hover { transform: scale(1.1); color: #38bdf8; }'
+        h += '.lightbox-btn.close-btn:hover { color: #f43f5e; }'
+        
+        h += '.icon-btn { position: fixed; top: 20px; background: rgba(255,255,255,0.1); padding: 10px; border-radius: 50%; border: 1px solid rgba(255,255,255,0.2); cursor: pointer; color: white; transition: 0.3s; z-index: 100; display: flex; align-items: center; justify-content: center; }'
+        h += '.bell-btn { left: 20px; }'
+        h += '.modal { display: none; position: fixed; top: 75px; left: 20px; background: rgba(30, 41, 59, 0.95); backdrop-filter: blur(15px); padding: 20px; border-radius: 20px; border: 1px solid rgba(56, 189, 248, 0.5); z-index: 101; box-shadow: 0 20px 50px rgba(0,0,0,0.6); width: 260px; }'
+        h += '.modal input { background: rgba(255,255,255,0.1); border: 1px solid rgba(255,255,255,0.2); color: white; padding: 12px; border-radius: 10px; width: 100%; box-sizing: border-box; margin-bottom: 12px; outline: none; font-size: 16px; }'
+        h += '.modal button { background: #38bdf8; color: #0f172a; border: none; padding: 12px; width: 100%; border-radius: 10px; font-weight: bold; cursor: pointer; font-size: 16px; }'
+        
+        # SEGMENTED PILL SELECTOR STYLING WITH ALIGNED FONT RENDERING STACKS
+        h += '.lang-pill-selector { position: fixed; top: 20px; right: 20px; display: flex; background: rgba(30, 41, 59, 0.7); border: 1px solid rgba(255, 255, 255, 0.08); border-radius: 20px; padding: 3px; backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px); z-index: 100; }'
+        h += '.lang-segment { display: inline-flex; align-items: center; justify-content: center; padding: 6px 14px; border-radius: 16px; font-size: 12px; font-weight: 700; color: #94a3b8; text-decoration: none; transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1); letter-spacing: 0.05em; }'
+        h += '.lang-segment:hover { color: #e2e8f0; }'
+        h += '.lang-segment.active { background: #38bdf8; color: #0f172a; }'
+        h += '.lang-te { font-family: "Noto Sans Telugu", "Segoe UI East Europe", "Malgun Gothic", sans-serif; font-size: 13px; }'
+        h += '.lang-ta { font-family: "Noto Sans Tamil", "Segoe UI East Europe", "Malgun Gothic", sans-serif; font-size: 13px; }'
+        
+        h += '@media (max-width: 768px) { .header-container { padding: 50px 16px 24px 16px; } .profile-logo-wrapper { width: 80px; height: 80px; margin-bottom: 16px; } .profile-logo img { width: 50px; height: 50px; } .banner-text { font-size: 16px; } .gallery-grid { gap: 4px; padding: 0 4px; } .grid-item { border-radius: 4px; } .divider { margin-bottom: 16px; } .lightbox-content { max-width: 95vw; } .lightbox-actions { gap: 16px; padding: 6px 16px; } .watermark-overlay { bottom: 12px; width: 32px; height: 32px; } .lang-pill-selector { top: 16px; right: 16px; } .lang-segment { padding: 5px 10px; font-size: 11px; } .lang-te, .lang-ta { font-size: 11px; } }'
+        h += '</style></head><body>'
+        
+        # LANGUAGE PILLS STRIPPED OF GLOBAL QUERY PARAMETERS
+        h += '<div class="lang-pill-selector">'
+        h += f'  <a href="/" class="lang-segment {"active" if lang_mode == "english" else ""}">EN</a>'
+        h += f'  <a href="/telugu" class="lang-segment lang-te {"active" if lang_mode == "telugu" else ""}">తెలుగు</a>'
+        h += f'  <a href="/tamil" class="lang-segment lang-ta {"active" if lang_mode == "tamil" else ""}">தமிழ்</a>'
+        h += '</div>'
+        
+        h += '<div class="icon-btn bell-btn" onclick="toggleM(event)"><svg width="20" height="20" fill="currentColor" viewBox="0 0 24 24"><path d="M12 22c1.1 0 2-.9 2-2h-4c0 1.1.89 2 2 2zm6-6v-5c0-3.07-1.64-5.64-4.5-6.32V4c0-.83-.67-1.5-1.5-1.5s-1.5 1.5-1.5 1.5v.68C7.63 5.36 6 7.92 6 11v5l-2 2v1h16v-1l-2-2z"/></svg></div>'
+        h += '<div id="subM" class="modal" onclick="event.stopPropagation()"><p style="margin:0 0 10px 0; font-size:14px; color:#cbd5e1;">Receive daily verses:</p><input type="email" id="uE" placeholder="Enter email"><button id="sBtn" onclick="sub()">Be Refreshed</button></div>'
+        
+        h += '<div class="header-container">'
+        h += '  <div class="profile-logo-wrapper">'
+        h += '    <div class="profile-logo"><img src="/logo.png" alt="Logo"></div>'
+        h += '  </div>'
+        
+        # Localized Banner Mapping
+        if lang_mode == "telugu":
+            h += '  <p class="banner-text">"దేవుని మాటలన్నియు పుటము పెట్టబడినవే ఆయనను ఆశ్రయించువారికి ఆయన కేడెము."</p>'
+            h += '  <p class="banner-reference">సామెతలు 30:5</p>'
+        elif lang_mode == "tamil":
+            h += '  <p class="banner-text">"தேவனுடைய வார்த்தையெல்லாம் புடமிடப்பட்டவை; தம்மை அண்டிக்கொள்ளுகிறவர்களுக்கு அவர் கேடகமானவர்."</p>'
+            h += '  <p class="banner-reference">நீதிமொழிகள் 30:5</p>'
+        else:
+            h += '  <p class="banner-text">"Every word of God is pure; He is a shield to those who put their trust in Him."</p>'
+            h += '  <p class="banner-reference">Proverbs 30:5</p>'
+            
+        h += '</div>'
+        h += '<div class="divider"></div>'
+        
+        # RENDERING GALLERY TILES USING CLOUDFRONT + DYNAMODB METADATA OBJECT PROPERTIES
+        h += '<div class="gallery-grid">'
+        client_js_array = []
+        for idx, img in enumerate(images):
+            full_cf_url = f"{CLOUDFRONT_BASE}/{img['s3_key']}"
+            client_js_array.append({'id': img['id'], 'url': full_cf_url})
+            
+            h += f'<div class="grid-item" id="tile-{img["id"]}" onclick="openLightbox({idx})">'
+            h += f'<img src="{full_cf_url}" loading="lazy" alt="Verse Asset">'
+            h += '</div>'
+        h += '</div>'
+        
+        # LIGHTBOX INJECTION LAYOUT
+        h += '<div id="lightbox" class="lightbox" onclick="closeLightbox()">'
+        h += '  <div id="lbContent" class="lightbox-content" onclick="event.stopPropagation()">'
+        h += '    <div class="img-frame">'
+        h += '      <img id="lightbox-img" class="lightbox-img" src="" alt="Expanded Verse">'
+        h += '      <div class="protection-shield"></div>'
+        h += '      <div class="watermark-overlay"><img src="/logo.png" alt="Watermark Logo"></div>'
+        h += '    </div>'
+        h += '    <div class="lightbox-actions">'
+        h += '      <div class="lightbox-btn" onclick="prevAsset()" title="Previous Image">'
+        h += '        <svg width="24" height="24" fill="currentColor" viewBox="0 0 24 24"><path d="M15.41 7.41L14 6l-6 6 6 6 1.41-1.41L10.83 12z"/></svg>'
+        h += '      </div>'
+        h += '      <div class="lightbox-btn close-btn" onclick="closeLightbox()" title="Close">'
+        h += '        <svg width="24" height="24" fill="currentColor" viewBox="0 0 24 24"><path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>'
+        h += '      </div>'
+        h += '      <div class="lightbox-btn" onclick="shareCurrentAsset()" title="Share Link">'
+        h += '        <svg width="24" height="24" fill="currentColor" viewBox="0 0 24 24"><path d="M18 16.08c-.76 0-1.44.3-1.96.77L8.91 12.7c.05-.23.09-.46.09-.7s-.04-.47-.09-.7l7.05-4.11c.54.5 1.25.81 2.04.81 1.66 0 3-1.34 3-3s-1.34-3-3-3-3 1.34-3 3c0 .24.04.47.09.7L8.04 9.81C7.5 9.31 6.79 9 6 9c-1.66 0-3 1.34-3 3s1.34 3 3 3c.79 0 1.5-.31 2.04-.81l7.12 4.16c-.05.21-.08.43-.08.65 0 1.61 1.31 2.92 2.92 2.92s2.92-1.31 2.92-2.92c0-1.61-1.31-2.92-2.92-2.92z"/></svg>'
+        h += '      </div>'
+        h += '      <div class="lightbox-btn" onclick="nextAsset()" title="Next Image">'
+        h += '        <svg width="24" height="24" fill="currentColor" viewBox="0 0 24 24"><path d="M10 6L8.59 7.41 13.17 12l-4.58 4.59L10 18l6-6z"/></svg>'
+        h += '      </div>'
+        h += '    </div>'
+        h += '  </div>'
+        h += '</div>'
+        
+        # FRONTEND ROUTER SCRIPTS
+        h += ' <script>const m=document.getElementById("subM"), lb=document.getElementById("lightbox"), lbImg=document.getElementById("lightbox-img"), lbContent=document.getElementById("lbContent");'
+        h += f'const metadataVault = {json.dumps(client_js_array)};'
+        h += 'let activeIdx = null;'
+        h += 'let startY = 0, currentY = 0, isDragging = false;'
+        
+        h += 'function toggleM(e){ e.stopPropagation(); m.style.display=(m.style.display==="block")?"none":"block"; }'
+        h += 'function closeM(){ m.style.display="none"; }'
+        h += 'async function sub(){ const e=document.getElementById("uE"),b=document.getElementById("sBtn"); if(!e.value.includes("@"))return alert("Valid email please!"); b.disabled=true; b.innerText="..."; try{ await fetch("' + SUBSCRIBER_URL + '",{method:"POST",mode:"no-cors",body:JSON.stringify({email:e.value.trim()})}); alert("Subscribed! Be Refreshed."); e.value=""; closeM(); }catch(err){ alert("Subscribed!"); closeM(); } b.disabled=false; b.innerText="Be Refreshed"; }'
+        
+        # BACKGROUND FETCH TO TRACK ALBUM VIEWS
+        h += 'function openLightbox(index) {'
+        h += '  activeIdx = index;'
+        h += '  lbImg.src = metadataVault[index].url;'
+        h += '  lb.classList.add("show");'
+        h += '  lbContent.style.transform = "translateY(0)";'
+        h += '  const targetId = metadataVault[index].id;'
+        h += '  const cleanUrl = window.location.protocol + "//" + window.location.host + window.location.pathname + "?id=" + targetId;'
+        h += '  window.history.replaceState({path:cleanUrl}, "", cleanUrl);'
+        h += '  fetch("/increment-view", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ image_id: targetId }) }).catch(() => {});'
+        h += '}'
+        
+        h += 'function closeLightbox() {'
+        h += '  lb.classList.remove("show");'
+        h += '  activeIdx = null;'
+        h += '  const resetUrl = window.location.protocol + "//" + window.location.host + window.location.pathname;'
+        h += '  window.history.replaceState({path:resetUrl}, "", resetUrl);'
+        h += '}'
+        
+        h += 'function nextAsset() {'
+        h += '  if(activeIdx === null || metadataVault.length === 0) return;'
+        h += '  let nextIdx = (activeIdx + 1) % metadataVault.length;'
+        h += '  openLightbox(nextIdx);'
+        h += '}'
+        
+        h += 'function prevAsset() {'
+        h += '  if(activeIdx === null || metadataVault.length === 0) return;'
+        h += '  let prevIdx = (activeIdx - 1 + metadataVault.length) % metadataVault.length;'
+        h += '  openLightbox(prevIdx);'
+        h += '}'
+        
+        h += 'function shareCurrentAsset(){'
+        h += '  if(activeIdx === null) return;'
+        h += '  const shareUrl = window.location.origin + window.location.pathname + "?id=" + metadataVault[activeIdx].id;'
+        h += '  if(navigator.share){'
+        h += '    navigator.share({title: document.title, url: shareUrl});'
+        h += '  } else {'
+        h += '    navigator.clipboard.writeText(shareUrl);'
+        h += '    alert("Permanent link to this specific verse copied!");'
+        h += '  }'
+        h += '}'
+        
+        document_event_listeners = 'document.addEventListener("keydown", e => {'
+        document_event_listeners += '  if (!lb.classList.contains("show")) return;'
+        document_event_listeners += '  if (e.key === "ArrowRight") nextAsset();'
+        document_event_listeners += '  if (e.key === "ArrowLeft") prevAsset();'
+        document_event_listeners += '  if (e.key === "Escape") closeLightbox();'
+        document_event_listeners += '});'
+        h += document_event_listeners
+        
+        # TOUCH LAYER GESTURES
+        h += 'let startX = 0, currentX = 0;'
+        h += 'lb.addEventListener("touchstart", e => { startY = e.touches[0].clientY; startX = e.touches[0].clientX; isDragging = true; }, {passive: true});'
+        h += 'lb.addEventListener("touchmove", e => {'
+        h += '  if (!isDragging) return;'
+        h += '  currentY = e.touches[0].clientY;'
+        h += '  currentX = e.touches[0].clientX;'
+        h += '  let deltaY = currentY - startY;'
+        h += '  let deltaX = currentX - startX;'
+        h += '  if (deltaY > 0 && Math.abs(deltaY) > Math.abs(deltaX)) { lbContent.style.transform = `translateY(${deltaY}px)`; }'
+        h += '}, {passive: true});'
+        h += 'lb.addEventListener("touchend", e => {'
+        h += '  if (!isDragging) return;'
+        h += '  isDragging = false;'
+        h += '  let deltaY = currentY - startY;'
+        h += '  let deltaX = currentX - startX;'
+        h += '  if (Math.abs(deltaX) > Math.abs(deltaY) && Math.abs(deltaX) > 60) {'
+        h += '    if (deltaX < 0) { nextAsset(); } else { prevAsset(); }'
+        h += '  } else if (deltaY > 120) { closeLightbox(); } else { lbContent.style.transform = "translateY(0)"; }'
+        h += '});'
+        
+        h += 'document.addEventListener("contextmenu", e => e.preventDefault());'
+        
+        # DEEP-LINK INITIALIZATION RESOLVER (Locates index pointer matching URL image_id string token)
+        h += f'const initialUrlId = "{url_id if url_id else ""}";'
+        h += 'window.onload = () => {'
+        h += '  if (initialUrlId) {'
+        h += '    const matchedIndex = metadataVault.findIndex(item => item.id.toLowerCase() === initialUrlId.toLowerCase());'
+        h += '    if (matchedIndex !== -1) { openLightbox(matchedIndex); }'
+        h += '  }'
+        h += '};'
+        
+        h += '</script></body></html>'
 
-        return {
-            statusCode: 404,
-            headers: { "Content-Type": "application/json", ...corsHeaders },
-            body: JSON.stringify({ message: "Route path not matched." })
-        };
-
-    } catch (error) {
-        console.error("Fatal exception parsed:", error);
-        return {
-            statusCode: 200, 
-            headers: { "Content-Type": "application/json", ...corsHeaders },
-            body: JSON.stringify({ success: false, error: error.message })
-        };
-    }
-};
+        return {'statusCode': 200, 'headers': {'Content-Type': 'text/html'}, 'body': h}
+    except Exception as e:
+        logger.error(str(e))
+        return {'statusCode': 500, 'body': 'System Error'}
