@@ -8,23 +8,31 @@
 </head>
 <body class="h-screen max-h-screen bg-slate-100 flex flex-col font-sans text-slate-800 overflow-hidden">
 
-    <header class="bg-slate-900 text-white p-4 shadow-md shrink-0">
-        <h1 class="text-xl font-bold">Verstantly Content Management</h1>
-        <p class="text-xs text-slate-400 mt-0.5">Select any image card below to instantly modify descriptions and S3 metadata.</p>
+    <header class="bg-slate-900 text-white p-4 shadow-md shrink-0 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 z-50">
+        <div>
+            <h1 class="text-xl font-bold">Verstantly Content Management</h1>
+            <p class="text-xs text-slate-400 mt-0.5">Select any image card below to instantly modify descriptions and S3 metadata.</p>
+        </div>
+        
+        <div class="flex items-center gap-4 bg-slate-800 border border-slate-700 rounded-lg px-4 py-2 text-xs font-medium text-slate-300 shadow-inner self-start sm:self-auto">
+            <span class="text-slate-400 font-bold border-r border-slate-700 pr-3 uppercase tracking-wider">Vault Stats</span>
+            <div>EN: <span id="count-english" class="text-sky-400 font-bold font-mono">...</span></div>
+            <div>TE: <span id="count-telugu" class="text-sky-400 font-bold font-mono">...</span></div>
+            <div>TA: <span id="count-tamil" class="text-sky-400 font-bold font-mono">...</span></div>
+        </div>
     </header>
 
     <div class="flex-1 flex flex-col md:flex-row overflow-hidden relative">
         
-        <div class="flex-1 flex flex-col relative overflow-hidden bg-slate-50">
+        <div class="flex-1 flex flex-col relative overflow-hidden bg-slate-50 h-full">
             
-            <div id="preview-modal" class="hidden absolute inset-0 bg-slate-900/85 backdrop-blur-sm z-30 flex flex-col items-center justify-center p-6 transition-all duration-200">
-                <button onclick="closePreview()" class="absolute top-4 right-4 bg-white/10 hover:bg-white/20 text-white font-bold p-2.5 rounded-full shadow transition-all focus:outline-none z-40">
+            <div id="preview-modal" class="hidden absolute inset-0 bg-slate-900/85 backdrop-blur-sm z-50 flex flex-col items-center justify-center p-4 transition-all duration-200">
+                <button onclick="closePreview()" class="absolute top-4 right-4 bg-white/10 hover:bg-white/20 text-white font-bold p-2.5 rounded-full shadow transition-all focus:outline-none z-50">
                     <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path></svg>
                 </button>
                 
-                <div class="max-w-full max-h-[75vh] flex items-center justify-center bg-black/40 rounded-xl overflow-hidden shadow-2xl border border-white/10 p-2 relative">
-                    <img id="modal-image-view" src="" class="max-w-full max-h-[72vh] object-contain rounded-md select-none" alt="High resolution target view" onerror="handleImageLoadError(this)" oncontextmenu="return false;" ondragstart="return false;">
-                    
+                <div class="max-w-full max-h-[70vh] flex items-center justify-center bg-black/40 rounded-xl overflow-hidden shadow-2xl border border-white/10 p-2 relative">
+                    <img id="modal-image-view" src="" class="max-w-full max-h-[68vh] object-contain rounded-md select-none" alt="High resolution target view" onerror="handleImageLoadError(this)" oncontextmenu="return false;" ondragstart="return false;">
                     <div class="absolute inset-0 z-10 bg-transparent select-none" oncontextmenu="return false;" ondragstart="return false;"></div>
                 </div>
 
@@ -33,17 +41,19 @@
                 </div>
             </div>
 
-            <main class="flex-1 p-6 overflow-y-auto h-full min-w-0">
+            <main class="flex-1 p-4 md:p-6 overflow-y-auto h-full min-w-0">
                 <h2 class="text-lg font-bold text-slate-800 mb-4">Your Image Assets</h2>
-                <div id="image-grid" class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-4 pb-12">
+                <div id="image-grid" class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-4 pb-24 md:pb-12">
                     <p class="text-sm text-slate-500 col-span-full">Loading image vault...</p>
                 </div>
             </main>
         </div>
 
-        <aside class="w-full md:w-[400px] bg-white border-t md:border-t-0 md:border-l border-slate-200 shadow-xl p-6 flex flex-col overflow-y-auto h-full shrink-0 relative z-40">
+        <aside id="edit-sidebar" class="fixed inset-x-0 bottom-0 transform translate-y-full md:translate-y-0 md:static w-full md:w-[400px] bg-white border-t md:border-t-0 md:border-l border-slate-200 shadow-2xl md:shadow-xl p-6 flex flex-col overflow-y-auto max-h-[85vh] md:max-h-full h-auto md:h-full shrink-0 transition-transform duration-300 ease-in-out z-40">
+            <div class="w-12 h-1.5 bg-slate-300 rounded-full mx-auto mb-4 md:hidden"></div>
+            
             <div id="edit-workspace" class="h-full">
-                <div class="h-full flex flex-col items-center justify-center text-center p-6 text-slate-400 mt-20">
+                <div class="h-full flex flex-col items-center justify-center text-center p-6 text-slate-400 my-12 md:mt-20">
                     <svg class="w-12 h-12 text-slate-300 mb-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"></path>
                     </svg>
@@ -63,7 +73,6 @@
             isSaving: false
         };
 
-        // Case-Insensitive URL Fallback Strategy
         window.handleImageLoadError = function(imgElement) {
             if (imgElement.getAttribute('data-fallback-attempted') === 'true') {
                 imgElement.src = 'https://placehold.co/300x200?text=Asset+Not+Found';
@@ -86,12 +95,36 @@
             }
         };
 
-        // 1. Load initial dataset from AWS
+        function calculateLanguageMetrics() {
+            let english = 0;
+            let telugu = 0;
+            let tamil = 0;
+
+            appState.images.forEach(img => {
+                if (!img.s3_key) return;
+                const lowerKey = img.s3_key.toLowerCase();
+                
+                if (lowerKey.startsWith('telugu/')) {
+                    telugu++;
+                } else if (lowerKey.startsWith('tamil/')) {
+                    tamil++;
+                } else if (lowerKey.startsWith('english/') || !lowerKey.includes('/')) {
+                    english++;
+                }
+            });
+
+            document.getElementById('count-english').innerText = english;
+            document.getElementById('count-telugu').innerText = telugu;
+            document.getElementById('count-tamil').innerText = tamil;
+        }
+
         async function loadGallery() {
             try {
                 const response = await fetch(`${API_BASE_URL}/images`);
                 const data = await response.json();
                 appState.images = data.images || [];
+                
+                calculateLanguageMetrics();
                 renderGrid();
             } catch (err) {
                 document.getElementById('image-grid').innerHTML = `
@@ -100,7 +133,6 @@
             }
         }
 
-        // 2. Render the grid of image cards using CloudFront paths (Protected using Option 1 & 2)
         function renderGrid() {
             const grid = document.getElementById('image-grid');
             if (appState.images.length === 0) {
@@ -110,6 +142,8 @@
 
             grid.innerHTML = appState.images.map(img => {
                 const isSelected = appState.selectedImage?.image_id === img.image_id;
+                const viewCount = img.views || 0; // Fallback to 0 if no view property exists yet
+                
                 return `
                     <div onclick="selectImage('${img.image_id}')" 
                          class="cursor-pointer bg-white rounded-xl overflow-hidden shadow-sm border-2 transition-all hover:scale-[1.01] ${isSelected ? 'border-blue-600 ring-2 ring-blue-100' : 'border-slate-200'}">
@@ -120,6 +154,11 @@
                                  oncontextmenu="return false;"
                                  ondragstart="return false;">
                             
+                            <div class="absolute top-2 left-2 bg-slate-900/70 backdrop-blur text-[10px] font-bold text-white px-2 py-0.5 rounded-full flex items-center gap-1 z-20 select-none">
+                                <svg class="w-3 h-3 text-sky-400" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/><path stroke-linecap="round" stroke-linejoin="round" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"/></svg>
+                                <span>${viewCount}</span>
+                            </div>
+
                             <div class="absolute inset-0 z-10 bg-transparent select-none" oncontextmenu="return false;" ondragstart="return false;"></div>
                         </div>
                         <div class="p-3">
@@ -131,12 +170,13 @@
             }).join('');
         }
 
-        // 3. Highlight selected image, load values into form, and open local pane pop-out
         window.selectImage = function(id) {
             const img = appState.images.find(i => i.image_id === id);
             appState.selectedImage = img;
             renderGrid();
             renderForm();
+            
+            document.getElementById('edit-sidebar').classList.remove('translate-y-full');
             
             const modalImg = document.getElementById('modal-image-view');
             modalImg.removeAttribute('data-fallback-attempted'); 
@@ -146,26 +186,40 @@
             document.getElementById('preview-modal').classList.remove('hidden');
         };
 
-        // Close pop-out preview helper
         window.closePreview = function() {
             document.getElementById('preview-modal').classList.add('hidden');
         };
 
-        // Close local pop-out overlay if clicking outside the core inner boundary block zone
+        window.dismissWorkspace = function() {
+            document.getElementById('edit-sidebar').classList.add('translate-y-full');
+            appState.selectedImage = null;
+            renderGrid();
+        };
+
         document.getElementById('preview-modal').addEventListener('click', function(e) {
             if (e.target === this) closePreview();
         });
 
-        // 4. Render the input form layout on the right panel
         function renderForm() {
             const panel = document.getElementById('edit-workspace');
             const img = appState.selectedImage;
+            const viewCount = img.views || 0;
 
             panel.innerHTML = `
                 <form id="metadata-form" onsubmit="saveMetadata(event)" class="space-y-5">
-                    <div class="border-b border-slate-200 pb-3">
-                        <h3 class="text-lg font-bold text-slate-900">Modify Image Data</h3>
-                        <span class="text-xs font-mono bg-slate-100 px-2 py-0.5 rounded mt-1 inline-block text-slate-500">ID: ${img.image_id}</span>
+                    <div class="flex items-center justify-between border-b border-slate-200 pb-3">
+                        <div>
+                            <h3 class="text-lg font-bold text-slate-900">Modify Image Data</h3>
+                            <div class="flex items-center gap-2 mt-1 flex-wrap">
+                                <span class="text-xs font-mono bg-slate-100 px-2 py-0.5 rounded text-slate-500">ID: ${img.image_id}</span>
+                                <span class="text-xs font-bold bg-sky-50 border border-sky-200 px-2 py-0.5 rounded text-sky-700 flex items-center gap-1">
+                                    Total Views: ${viewCount}
+                                </span>
+                            </div>
+                        </div>
+                        <button type="button" onclick="dismissWorkspace()" class="md:hidden text-xs font-bold text-slate-500 bg-slate-100 hover:bg-slate-200 px-3 py-1.5 rounded-lg transition-colors">
+                            Done
+                        </button>
                     </div>
 
                     <div id="status-alert" class="hidden p-3 rounded-lg text-xs font-medium"></div>
@@ -187,7 +241,7 @@
 
                     <div class="pt-2 flex gap-2">
                         <button type="button" onclick="closePreview()" class="px-3 py-2 border border-slate-300 hover:bg-slate-50 text-slate-700 rounded-lg text-sm font-medium transition-colors">
-                            Dismiss View
+                            View Image
                         </button>
                         <button type="submit" id="save-btn" class="flex-1 bg-blue-600 hover:bg-blue-700 text-white font-bold py-2.5 px-4 rounded-lg text-sm transition-colors shadow">
                             Save Changes
@@ -197,7 +251,6 @@
             `;
         }
 
-        // 5. Submit updated fields directly to AWS Lambda via API Gateway
         window.saveMetadata = async function(e) {
             e.preventDefault();
             if (appState.isSaving) return;
@@ -229,11 +282,20 @@
                     alertBox.className = "p-3 rounded-lg text-xs font-medium bg-green-50 text-green-700 border border-green-200 block";
                     alertBox.innerText = "Asset updated perfectly!";
                     
-                    appState.images = appState.images.map(img => img.image_id === payload.image_id ? result.data : img);
-                    appState.selectedImage = result.data;
+                    // Maintain the view counts in local memory when matching array adjustments
+                    const updatedData = { ...result.data, views: appState.selectedImage.views };
+                    
+                    appState.images = appState.images.map(img => img.image_id === payload.image_id ? updatedData : img);
+                    appState.selectedImage = updatedData;
+                    
+                    calculateLanguageMetrics();
                     renderGrid();
 
-                    document.getElementById('modal-reference-view').innerText = result.data.reference ? `PATH: ${result.data.s3_key} (${result.data.reference})` : `PATH: ${result.data.s3_key}`;
+                    document.getElementById('modal-reference-view').innerText = updatedData.reference ? `PATH: ${updatedData.s3_key} (${updatedData.reference})` : `PATH: ${updatedData.s3_key}`;
+                    
+                    setTimeout(() => {
+                        if (window.innerWidth < 768) dismissWorkspace();
+                    }, 800);
                 } else {
                     alertBox.className = "p-3 rounded-lg text-xs font-medium bg-red-50 text-red-700 border border-red-200 block";
                     alertBox.innerText = result.message || "Failed to save edits.";
@@ -248,7 +310,6 @@
             }
         };
 
-        // Initialize display list on load
         loadGallery();
     </script>
 </body>
