@@ -23,9 +23,40 @@ export const handler = async (event) => {
 
     try {
         // ==========================================
-        // ROUTE 1: FETCH IMAGES & AUTO-SYNC S3
+        // NEW ROUTE: REAL-TIME INVENTORY LANGUAGE COUNTS
         // ==========================================
-        if (httpMethod === "GET" && path.includes("/images") && !path.includes("/update")) {
+        if (httpMethod === "GET" && path.includes("/images/counts")) {
+            const s3Response = await s3.send(new ListObjectsV2Command({ Bucket: BUCKET_NAME }));
+            const s3Objects = s3Response.Contents || [];
+
+            let english = 0;
+            let telugu = 0;
+            let tamil = 0;
+
+            s3Objects.forEach(obj => {
+                if (obj.Key.endsWith('/')) return;
+                const lowerKey = obj.Key.toLowerCase();
+                
+                if (lowerKey.startsWith('telugu/')) {
+                    telugu++;
+                } else if (lowerKey.startsWith('tamil/')) {
+                    tamil++;
+                } else if (lowerKey.startsWith('english/') || !lowerKey.includes('/')) {
+                    english++;
+                }
+            });
+
+            return {
+                statusCode: 200,
+                headers: { "Content-Type": "application/json", ...corsHeaders },
+                body: JSON.stringify({ english, telugu, tamil })
+            };
+        }
+
+        // ==========================================
+        // ROUTE 1: FETCH IMAGES & AUTO-SYNC S3 (WITH TIMESTAMP BACKFILL)
+        // ==========================================
+        if (httpMethod === "GET" && path.includes("/images") && !path.includes("/update") && !path.includes("/counts")) {
             const s3Response = await s3.send(new ListObjectsV2Command({ Bucket: BUCKET_NAME }));
             const s3Objects = s3Response.Contents || [];
 
@@ -42,36 +73,81 @@ export const handler = async (event) => {
             for (const obj of s3Objects) {
                 if (obj.Key.endsWith('/')) continue; 
 
-                if (dbMap.has(obj.Key)) {
-                    const matchedItem = dbMap.get(obj.Key);
+                let targetKey = obj.Key;
+                
+                const s3EpochTimestamp = obj.LastModified 
+                    ? Math.floor(new Date(obj.LastModified).getTime() / 1000).toString() 
+                    : Math.floor(Date.now() / 1000).toString();
+
+                if (targetKey.endsWith('.JPG') || targetKey.endsWith('.JPEG')) {
+                    const lowCaseKey = targetKey.replace(/\.JPG$/, '.jpg').replace(/\.JPEG$/, '.jpeg');
+                    
+                    try {
+                        await s3.send(new CopyObjectCommand({
+                            Bucket: BUCKET_NAME,
+                            CopySource: `${BUCKET_NAME}/${targetKey}`,
+                            Key: lowCaseKey
+                        }));
+                        await s3.send(new DeleteObjectCommand({ Bucket: BUCKET_NAME, Key: targetKey }));
+                        
+                        targetKey = lowCaseKey; 
+                        console.log(`Successfully normalized asset file path capitalization structure from [${obj.Key}] to [${targetKey}]`);
+                    } catch (renameErr) {
+                        console.error(`Failed executing systemic case mutation routine transformation for key sequence: ${obj.Key}`, renameErr);
+                    }
+                }
+
+                if (dbMap.has(targetKey)) {
+                    const matchedItem = dbMap.get(targetKey);
+                    const existingId = matchedItem.image_id?.S || "";
+                    
+                    if (!matchedItem.created_at || !matchedItem.created_at.S) {
+                        console.log(`Backfilling missing created_at timestamp (${s3EpochTimestamp}) for existing asset: ${existingId}`);
+                        try {
+                            await dynamo.send(new UpdateItemCommand({
+                                TableName: TABLE_NAME,
+                                Key: { "image_id": { S: existingId } },
+                                UpdateExpression: "SET #cat = :c",
+                                ExpressionAttributeNames: { "#cat": "created_at" },
+                                ExpressionAttributeValues: { ":c": { S: s3EpochTimestamp } }
+                            }));
+                            matchedItem.created_at = { S: s3EpochTimestamp };
+                        } catch (updateErr) {
+                            console.error(`Failed backfilling timestamp for ID ${existingId}:`, updateErr);
+                        }
+                    }
+
                     finalImages.push({
-                        image_id: matchedItem.image_id?.S || "",
-                        s3_key: matchedItem.s3_key?.S || obj.Key,
-                        current_filename: matchedItem.current_filename?.S || obj.Key.split('/').pop(),
+                        image_id: existingId,
+                        s3_key: targetKey,
+                        current_filename: matchedItem.current_filename?.S || targetKey.split('/').pop(),
                         reference: matchedItem.reference?.S || "",
-                        verse_text: matchedItem.verse_text?.S || ""
+                        verse_text: matchedItem.verse_text?.S || "",
+                        created_at: matchedItem.created_at?.S || s3EpochTimestamp
                     });
                 } else {
                     const newId = `img_${Math.random().toString(36).substring(2, 9)}`;
-                    const fileName = obj.Key.split('/').pop();
+                    const fileName = targetKey.split('/').pop();
 
                     await dynamo.send(new PutItemCommand({
                         TableName: TABLE_NAME,
                         Item: {
                             "image_id": { S: newId },
-                            "s3_key": { S: obj.Key },
+                            "s3_key": { S: targetKey },
                             "current_filename": { S: fileName },
                             "reference": { S: "" },
-                            "verse_text": { S: "" }
+                            "verse_text": { S: "" },
+                            "created_at": { S: s3EpochTimestamp }
                         }
                     }));
 
                     finalImages.push({
                         image_id: newId,
-                        s3_key: obj.Key,
+                        s3_key: targetKey,
                         current_filename: fileName,
                         reference: "",
-                        verse_text: ""
+                        verse_text: "",
+                        created_at: s3EpochTimestamp
                     });
                 }
             }
@@ -102,11 +178,14 @@ export const handler = async (event) => {
             let finalFileName = requested_filename;
             const currentFileName = s3_key.split('/').pop();
 
-            // ONLY execute S3 copy/delete routines if the filename string actually changed
-            if (requested_filename && requested_filename !== currentFileName) {
-                const extIndex = requested_filename.lastIndexOf('.');
-                const baseName = extIndex !== -1 ? requested_filename.substring(0, extIndex) : requested_filename;
-                const fileExt = extIndex !== -1 ? requested_filename.substring(extIndex) : '';
+            if (finalFileName && (finalFileName.endsWith('.JPG') || finalFileName.endsWith('.JPEG'))) {
+                finalFileName = finalFileName.replace(/\.JPG$/, '.jpg').replace(/\.JPEG$/, '.jpeg');
+            }
+
+            if (finalFileName && finalFileName !== currentFileName) {
+                const extIndex = finalFileName.lastIndexOf('.');
+                const baseName = extIndex !== -1 ? finalFileName.substring(0, extIndex) : finalFileName;
+                const fileExt = extIndex !== -1 ? finalFileName.substring(extIndex) : '';
 
                 const pathSegments = s3_key.split('/');
                 pathSegments.pop();
@@ -145,7 +224,6 @@ export const handler = async (event) => {
                 await s3.send(new DeleteObjectCommand({ Bucket: BUCKET_NAME, Key: s3_key }));
             }
 
-            // Always update database values using isolated character names safely
             await dynamo.send(new UpdateItemCommand({
                 TableName: TABLE_NAME,
                 Key: { "image_id": { S: image_id } },
@@ -177,13 +255,13 @@ export const handler = async (event) => {
         return {
             statusCode: 404,
             headers: { "Content-Type": "application/json", ...corsHeaders },
-            body: JSON.stringify({ message: `Route path not matched.` })
+            body: JSON.stringify({ message: "Route path not matched." })
         };
 
     } catch (error) {
         console.error("Fatal exception parsed:", error);
         return {
-            statusCode: 200, // Explicitly capture crash to bypass API Gateway 500 blocks
+            statusCode: 200, 
             headers: { "Content-Type": "application/json", ...corsHeaders },
             body: JSON.stringify({ success: false, error: error.message })
         };
