@@ -13,7 +13,7 @@ export const handler = async (event) => {
 
     const corsHeaders = {
         "Access-Control-Allow-Origin": "*",
-        "Access-Control-Allow-Methods": "GET,PUT,OPTIONS",
+        "Access-Control-Allow-Methods": "GET,PUT,POST,OPTIONS",
         "Access-Control-Allow-Headers": "Content-Type"
     };
 
@@ -23,7 +23,7 @@ export const handler = async (event) => {
 
     try {
         // ==========================================
-        // NEW ROUTE: REAL-TIME INVENTORY LANGUAGE COUNTS
+        // ROUTE: REAL-TIME INVENTORY LANGUAGE COUNTS
         // ==========================================
         if (httpMethod === "GET" && path.includes("/images/counts")) {
             const s3Response = await s3.send(new ListObjectsV2Command({ Bucket: BUCKET_NAME }));
@@ -54,9 +54,9 @@ export const handler = async (event) => {
         }
 
         // ==========================================
-        // ROUTE 1: FETCH IMAGES & AUTO-SYNC S3 (WITH TIMESTAMP BACKFILL)
+        // ROUTE 1: FETCH IMAGES & AUTO-SYNC S3 (SORTED BY VIEWS DESCENDING)
         // ==========================================
-        if (httpMethod === "GET" && path.includes("/images") && !path.includes("/update") && !path.includes("/counts")) {
+        if (httpMethod === "GET" && path.includes("/images") && !path.includes("/update") && !path.includes("/counts") && !path.includes("/view")) {
             const s3Response = await s3.send(new ListObjectsV2Command({ Bucket: BUCKET_NAME }));
             const s3Objects = s3Response.Contents || [];
 
@@ -123,7 +123,8 @@ export const handler = async (event) => {
                         current_filename: matchedItem.current_filename?.S || targetKey.split('/').pop(),
                         reference: matchedItem.reference?.S || "",
                         verse_text: matchedItem.verse_text?.S || "",
-                        created_at: matchedItem.created_at?.S || s3EpochTimestamp
+                        created_at: matchedItem.created_at?.S || s3EpochTimestamp,
+                        views: matchedItem.views?.N ? parseInt(matchedItem.views.N, 10) : 0
                     });
                 } else {
                     const newId = `img_${Math.random().toString(36).substring(2, 9)}`;
@@ -147,10 +148,21 @@ export const handler = async (event) => {
                         current_filename: fileName,
                         reference: "",
                         verse_text: "",
-                        created_at: s3EpochTimestamp
+                        created_at: s3EpochTimestamp,
+                        views: 0
                     });
                 }
             }
+
+            // --- POPULARITY ENGINE SORT ---
+            // Re-orders assets descending so files with maximum views land on top. 
+            // Falls back to creation date comparison if views numbers tie.
+            finalImages.sort((a, b) => {
+                if (b.views !== a.views) {
+                    return b.views - a.views;
+                }
+                return parseInt(b.created_at, 10) - parseInt(a.created_at, 10);
+            });
 
             return {
                 statusCode: 200,
@@ -249,6 +261,36 @@ export const handler = async (event) => {
                     success: true,
                     data: { image_id, s3_key: finalS3Key, current_filename: finalFileName || currentFileName, reference, verse_text }
                 })
+            };
+        }
+
+        // ==========================================
+        // NEW ROUTE: INCREMENT IMAGE VIEW COUNT
+        // ==========================================
+        if (httpMethod === "POST" && path.includes("/images/view")) {
+            const body = JSON.parse(event.body || "{}");
+            const { image_id } = body;
+
+            if (!image_id) {
+                return {
+                    statusCode: 400,
+                    headers: { "Content-Type": "application/json", ...corsHeaders },
+                    body: JSON.stringify({ success: false, message: "Missing image_id." })
+                };
+            }
+
+            await dynamo.send(new UpdateItemCommand({
+                TableName: TABLE_NAME,
+                Key: { "image_id": { S: image_id } },
+                UpdateExpression: "ADD #v :inc",
+                ExpressionAttributeNames: { "#v": "views" },
+                ExpressionAttributeValues: { ":inc": { N: "1" } }
+            }));
+
+            return {
+                statusCode: 200,
+                headers: { "Content-Type": "application/json", ...corsHeaders },
+                body: JSON.stringify({ success: true, message: "View count incremented safely." })
             };
         }
 
