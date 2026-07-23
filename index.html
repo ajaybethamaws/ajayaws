@@ -42,6 +42,27 @@
             </div>
 
             <main class="flex-1 p-4 md:p-6 overflow-y-auto h-full min-w-0">
+                
+                <div class="mb-5 max-w-full relative">
+                    <div class="relative flex items-center">
+                        <span class="absolute left-4 text-slate-400">
+                            <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/></svg>
+                        </span>
+                        <input 
+                            type="text" 
+                            id="adminSearchInput" 
+                            placeholder="Search image records by reference, text, ID, or file parameters..." 
+                            class="w-full pl-11 pr-10 py-2.5 bg-white border border-slate-200 rounded-xl text-sm text-slate-800 placeholder-slate-400 shadow-sm outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100 transition-all"
+                            oninput="executeDatabaseSearchFilter(this.value)"
+                        >
+                        <button 
+                            id="clearSearchBtn" 
+                            onclick="clearActiveSearch()" 
+                            class="hidden absolute right-3 text-slate-400 hover:text-slate-600 text-lg font-bold select-none focus:outline-none"
+                        >&times;</button>
+                    </div>
+                </div>
+
                 <h2 class="text-lg font-bold text-slate-800 mb-4">Your Image Assets</h2>
                 <div id="image-grid" class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-4 pb-24 md:pb-12">
                     <p class="text-sm text-slate-500 col-span-full">Loading image vault...</p>
@@ -69,6 +90,7 @@
 
         let appState = {
             images: [],
+            filteredImages: [],
             selectedImage: null,
             isSaving: false
         };
@@ -123,6 +145,7 @@
                 const response = await fetch(`${API_BASE_URL}/images`);
                 const data = await response.json();
                 appState.images = data.images || [];
+                appState.filteredImages = [...appState.images];
                 
                 calculateLanguageMetrics();
                 renderGrid();
@@ -135,14 +158,14 @@
 
         function renderGrid() {
             const grid = document.getElementById('image-grid');
-            if (appState.images.length === 0) {
-                grid.innerHTML = '<p class="text-sm text-slate-500 col-span-full">No image assets found in database.</p>';
+            if (appState.filteredImages.length === 0) {
+                grid.innerHTML = '<p class="text-sm text-slate-500 col-span-full">No matching image assets found.</p>';
                 return;
             }
 
-            grid.innerHTML = appState.images.map(img => {
+            grid.innerHTML = appState.filteredImages.map(img => {
                 const isSelected = appState.selectedImage?.image_id === img.image_id;
-                const viewCount = img.views || 0; // Fallback to 0 if no view property exists yet
+                const viewCount = img.views || 0;
                 
                 return `
                     <div onclick="selectImage('${img.image_id}')" 
@@ -169,6 +192,35 @@
                 `;
             }).join('');
         }
+
+        window.executeDatabaseSearchFilter = function(query) {
+            const searchTerm = query.toLowerCase().trim();
+            const clearBtn = document.getElementById('clearSearchBtn');
+
+            clearBtn.style.display = searchTerm ? 'block' : 'none';
+
+            if (!searchTerm) {
+                appState.filteredImages = [...appState.images];
+            } else {
+                appState.filteredImages = appState.images.filter(img => {
+                    return (
+                        (img.image_id || '').toLowerCase().includes(searchTerm) ||
+                        (img.reference || '').toLowerCase().includes(searchTerm) ||
+                        (img.verse_text || '').toLowerCase().includes(searchTerm) ||
+                        (img.current_filename || '').toLowerCase().includes(searchTerm) ||
+                        (img.s3_key || '').toLowerCase().includes(searchTerm)
+                    );
+                });
+            }
+            renderGrid();
+        };
+
+        window.clearActiveSearch = function() {
+            const input = document.getElementById('adminSearchInput');
+            input.value = '';
+            executeDatabaseSearchFilter('');
+            input.focus();
+        };
 
         window.selectImage = function(id) {
             const img = appState.images.find(i => i.image_id === id);
@@ -282,14 +334,16 @@
                     alertBox.className = "p-3 rounded-lg text-xs font-medium bg-green-50 text-green-700 border border-green-200 block";
                     alertBox.innerText = "Asset updated perfectly!";
                     
-                    // Maintain the view counts in local memory when matching array adjustments
                     const updatedData = { ...result.data, views: appState.selectedImage.views };
                     
                     appState.images = appState.images.map(img => img.image_id === payload.image_id ? updatedData : img);
-                    appState.selectedImage = updatedData;
                     
+                    // Keep search terms from snapping grid views back after typing edits out
+                    const currentSearchTerm = document.getElementById('adminSearchInput').value;
+                    executeDatabaseSearchFilter(currentSearchTerm);
+
+                    appState.selectedImage = updatedData;
                     calculateLanguageMetrics();
-                    renderGrid();
 
                     document.getElementById('modal-reference-view').innerText = updatedData.reference ? `PATH: ${updatedData.s3_key} (${updatedData.reference})` : `PATH: ${updatedData.s3_key}`;
                     
