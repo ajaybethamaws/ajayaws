@@ -163,17 +163,25 @@
         <div class="flex-1 flex flex-col relative overflow-hidden bg-slate-50 h-full">
             
             <!-- OPTIONAL ENLARGED PREVIEW MODAL -->
-            <div id="preview-modal" class="hidden fixed inset-0 bg-slate-950/90 backdrop-blur-md z-50 flex flex-col items-center justify-center p-4 transition-all duration-200">
+            <div id="preview-modal" class="hidden fixed inset-0 bg-slate-950/90 backdrop-blur-md z-50 flex flex-col items-center justify-center p-2 md:p-4 transition-all duration-200">
                 <button type="button" onclick="closePreview(event)" class="absolute top-4 right-4 bg-white/10 hover:bg-white/20 text-white font-bold p-2.5 rounded-full shadow transition-all focus:outline-none z-50 cursor-pointer">
                     <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path></svg>
                 </button>
+
+                <div class="absolute top-4 left-4 flex items-center gap-1.5 z-50">
+                    <button type="button" onclick="changePreviewZoom(-0.25, event)" class="bg-white/90 hover:bg-white text-slate-900 font-bold w-9 h-9 rounded-lg shadow cursor-pointer" title="Zoom out">−</button>
+                    <button type="button" onclick="fitPreviewImage(event)" class="bg-white/90 hover:bg-white text-slate-900 font-bold h-9 px-3 rounded-lg shadow cursor-pointer text-xs">
+                        Fit
+                    </button>
+                    <button type="button" onclick="changePreviewZoom(0.25, event)" class="bg-white/90 hover:bg-white text-slate-900 font-bold w-9 h-9 rounded-lg shadow cursor-pointer" title="Zoom in">+</button>
+                    <span id="preview-zoom-label" class="bg-slate-900/75 text-white h-9 px-3 rounded-lg shadow flex items-center text-xs font-bold">150%</span>
+                </div>
                 
-                <div class="max-w-full max-h-[70vh] flex items-center justify-center bg-black/40 rounded-xl overflow-hidden shadow-2xl border border-white/10 p-2 relative">
-                    <img id="modal-image-view" src="" class="max-w-full max-h-[68vh] object-contain rounded-md select-none" alt="High resolution target view" onerror="handleImageLoadError(this)" oncontextmenu="return false;" ondragstart="return false;">
-                    <div class="absolute inset-0 z-10 bg-transparent select-none" oncontextmenu="return false;" ondragstart="return false;"></div>
+                <div id="preview-image-container" class="w-full flex-1 min-h-0 flex items-center justify-center bg-black/40 rounded-xl overflow-auto shadow-2xl border border-white/10 p-2 relative">
+                    <img id="modal-image-view" src="" class="w-full h-full object-contain rounded-md select-none transition-transform duration-150" alt="High resolution target view" onerror="handleImageLoadError(this)" oncontextmenu="return false;" ondragstart="return false;">
                 </div>
 
-                <div class="mt-4 bg-white/90 backdrop-blur text-slate-900 px-6 py-2 rounded-full text-center max-w-xl font-medium shadow-md text-xs font-mono truncate z-20">
+                <div class="mt-2 md:mt-4 shrink-0 bg-white/90 backdrop-blur text-slate-900 px-6 py-2 rounded-full text-center max-w-xl font-medium shadow-md text-xs font-mono truncate z-20">
                     <span id="modal-reference-view"></span>
                 </div>
             </div>
@@ -215,7 +223,7 @@
                 <h2 class="text-base font-bold text-slate-800 mb-4 tracking-tight">Your Image Assets</h2>
                 
                 <!-- GRID DISPLAY -->
-                <div id="image-grid" class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-4 pb-24 md:pb-12">
+                <div id="image-grid" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4 pb-24 md:pb-12">
                     <div class="col-span-full py-12 text-center">
                         <div class="inline-block animate-spin rounded-full h-8 w-8 border-4 border-sky-500 border-t-transparent mb-3"></div>
                         <p class="text-sm text-slate-500 font-medium">Loading image vault...</p>
@@ -574,6 +582,27 @@
             executeDatabaseSearchFilter();
         }
 
+        let previewZoom = 1.5;
+
+        function applyPreviewZoom() {
+            const img = document.getElementById('modal-image-view');
+            const label = document.getElementById('preview-zoom-label');
+            img.style.transform = `scale(${previewZoom})`;
+            label.innerText = `${Math.round(previewZoom * 100)}%`;
+        }
+
+        function changePreviewZoom(amount, event) {
+            if (event) event.stopPropagation();
+            previewZoom = Math.min(3, Math.max(0.75, previewZoom + amount));
+            applyPreviewZoom();
+        }
+
+        function fitPreviewImage(event) {
+            if (event) event.stopPropagation();
+            previewZoom = 1;
+            applyPreviewZoom();
+        }
+
         function openPreview(s3Key, reference, event) {
             if (event) event.stopPropagation();
             const modal = document.getElementById('preview-modal');
@@ -582,6 +611,8 @@
 
             img.src = `https://${CLOUDFRONT_DOMAIN}/${s3Key}`;
             ref.innerText = reference || 'Unreferenced Asset';
+            previewZoom = 1.5;
+            applyPreviewZoom();
             modal.classList.remove('hidden');
         }
 
@@ -614,11 +645,11 @@
                         onclick="selectImage('${imgId}')" 
                         class="group bg-white rounded-2xl border ${isSelected ? 'border-sky-500 ring-2 ring-sky-100 shadow-md' : 'border-slate-200 hover:border-slate-300'} overflow-hidden cursor-pointer transition-all duration-200 flex flex-col relative"
                     >
-                        <div class="aspect-square bg-slate-100 relative overflow-hidden">
+                        <div class="aspect-square bg-slate-100 relative overflow-hidden p-1">
                             <img 
                                 src="https://${CLOUDFRONT_DOMAIN}/${img.s3_key}" 
                                 alt="${img.reference || 'Bible Verse'}" 
-                                class="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
+                                class="w-full h-full object-contain transition-opacity duration-300 group-hover:opacity-95"
                                 onerror="handleImageLoadError(this)"
                                 loading="lazy"
                             >
@@ -684,8 +715,8 @@
                         <button onclick="deselectImage()" class="text-xs text-slate-400 hover:text-slate-600 font-bold cursor-pointer">Close</button>
                     </div>
 
-                    <div class="aspect-video bg-slate-900 rounded-xl overflow-hidden relative border border-slate-200 shadow-sm">
-                        <img src="https://${CLOUDFRONT_DOMAIN}/${img.s3_key}" class="w-full h-full object-cover" onerror="handleImageLoadError(this)">
+                    <div class="aspect-video bg-slate-900 rounded-xl overflow-hidden relative border border-slate-200 shadow-sm p-1">
+                        <img src="https://${CLOUDFRONT_DOMAIN}/${img.s3_key}" class="w-full h-full object-contain" onerror="handleImageLoadError(this)">
                     </div>
 
                     <form id="edit-form" onsubmit="handleSaveImage(event)" class="space-y-3 text-left">
