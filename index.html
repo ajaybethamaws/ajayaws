@@ -137,7 +137,7 @@
             </div>
             <div>
                 <h1 class="text-xl font-bold tracking-tight">Verstantly Content Management</h1>
-                <p class="text-xs text-slate-400 mt-0.5">Select any image card below to modify descriptions and S3 metadata.</p>
+                <p class="text-xs text-slate-400 mt-0.5">Select any image card below to view large preview and modify S3 metadata.</p>
             </div>
         </div>
         
@@ -161,31 +161,6 @@
         
         <!-- MAIN GALLERY CONTAINER -->
         <div class="flex-1 flex flex-col relative overflow-hidden bg-slate-50 h-full">
-            
-            <!-- OPTIONAL ENLARGED PREVIEW MODAL -->
-            <div id="preview-modal" class="hidden fixed inset-0 bg-slate-950/90 backdrop-blur-md z-50 flex flex-col items-center justify-center p-2 md:p-4 transition-all duration-200">
-                <button type="button" onclick="closePreview(event)" class="absolute top-4 right-4 bg-white/10 hover:bg-white/20 text-white font-bold p-2.5 rounded-full shadow transition-all focus:outline-none z-50 cursor-pointer">
-                    <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path></svg>
-                </button>
-
-                <div class="absolute top-4 left-4 flex items-center gap-1.5 z-50">
-                    <button type="button" onclick="changePreviewZoom(-0.25, event)" class="bg-white/90 hover:bg-white text-slate-900 font-bold w-9 h-9 rounded-lg shadow cursor-pointer" title="Zoom out">−</button>
-                    <button type="button" onclick="fitPreviewImage(event)" class="bg-white/90 hover:bg-white text-slate-900 font-bold h-9 px-3 rounded-lg shadow cursor-pointer text-xs">
-                        Fit
-                    </button>
-                    <button type="button" onclick="changePreviewZoom(0.25, event)" class="bg-white/90 hover:bg-white text-slate-900 font-bold w-9 h-9 rounded-lg shadow cursor-pointer" title="Zoom in">+</button>
-                    <span id="preview-zoom-label" class="bg-slate-900/75 text-white h-9 px-3 rounded-lg shadow flex items-center text-xs font-bold">150%</span>
-                </div>
-                
-                <div id="preview-image-container" class="w-full flex-1 min-h-0 flex items-center justify-center bg-black/40 rounded-xl overflow-auto shadow-2xl border border-white/10 p-2 relative">
-                    <img id="modal-image-view" src="" class="w-full h-full object-contain rounded-md select-none transition-transform duration-150" alt="High resolution target view" onerror="handleImageLoadError(this)" oncontextmenu="return false;" ondragstart="return false;">
-                </div>
-
-                <div class="mt-2 md:mt-4 shrink-0 bg-white/90 backdrop-blur text-slate-900 px-6 py-2 rounded-full text-center max-w-xl font-medium shadow-md text-xs font-mono truncate z-20">
-                    <span id="modal-reference-view"></span>
-                </div>
-            </div>
-
             <main class="flex-1 p-4 md:p-6 overflow-y-auto h-full min-w-0">
                 
                 <!-- SEARCH & SORT CONTROLS -->
@@ -232,16 +207,17 @@
             </main>
         </div>
 
-        <!-- EDIT WORKSPACE SIDEBAR -->
-        <aside id="edit-sidebar" class="fixed inset-x-0 bottom-0 transform translate-y-full md:translate-y-0 md:static w-full md:w-[400px] bg-white border-t md:border-t-0 md:border-l border-slate-200 shadow-2xl md:shadow-none p-6 flex flex-col overflow-y-auto max-h-[85vh] md:max-h-full h-auto md:h-full shrink-0 transition-transform duration-300 ease-in-out z-40">
+        <!-- RIGHT WORKSPACE SIDEBAR (NOW DOUBLES AS LARGE PREVIEW & EDITOR) -->
+        <aside id="edit-sidebar" class="fixed inset-x-0 bottom-0 transform translate-y-full md:translate-y-0 md:static w-full md:w-[460px] lg:w-[500px] bg-white border-t md:border-t-0 md:border-l border-slate-200 shadow-2xl md:shadow-none p-6 flex flex-col overflow-y-auto max-h-[85vh] md:max-h-full h-auto md:h-full shrink-0 transition-transform duration-300 ease-in-out z-40">
             <div class="w-12 h-1.5 bg-slate-300 rounded-full mx-auto mb-4 md:hidden"></div>
             
             <div id="edit-workspace" class="h-full flex flex-col justify-between">
                 <div class="h-full flex flex-col items-center justify-center text-center p-6 text-slate-400 my-12 md:my-auto">
                     <svg class="w-12 h-12 text-slate-300 mb-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"></path>
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"></path>
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"></path>
                     </svg>
-                    <p class="text-sm font-medium">Click on any image card to unlock the editing workspace properties.</p>
+                    <p class="text-sm font-medium">Click on any image card to inspect the large high-resolution view and edit verse metadata.</p>
                 </div>
             </div>
         </aside>
@@ -582,45 +558,6 @@
             executeDatabaseSearchFilter();
         }
 
-        let previewZoom = 1.5;
-
-        function applyPreviewZoom() {
-            const img = document.getElementById('modal-image-view');
-            const label = document.getElementById('preview-zoom-label');
-            img.style.transform = `scale(${previewZoom})`;
-            label.innerText = `${Math.round(previewZoom * 100)}%`;
-        }
-
-        function changePreviewZoom(amount, event) {
-            if (event) event.stopPropagation();
-            previewZoom = Math.min(3, Math.max(0.75, previewZoom + amount));
-            applyPreviewZoom();
-        }
-
-        function fitPreviewImage(event) {
-            if (event) event.stopPropagation();
-            previewZoom = 1;
-            applyPreviewZoom();
-        }
-
-        function openPreview(s3Key, reference, event) {
-            if (event) event.stopPropagation();
-            const modal = document.getElementById('preview-modal');
-            const img = document.getElementById('modal-image-view');
-            const ref = document.getElementById('modal-reference-view');
-
-            img.src = `https://${CLOUDFRONT_DOMAIN}/${s3Key}`;
-            ref.innerText = reference || 'Unreferenced Asset';
-            previewZoom = 1.5;
-            applyPreviewZoom();
-            modal.classList.remove('hidden');
-        }
-
-        function closePreview(event) {
-            if (event) event.stopPropagation();
-            document.getElementById('preview-modal').classList.add('hidden');
-        }
-
         function renderGrid() {
             const grid = document.getElementById('image-grid');
 
@@ -654,7 +591,7 @@
                                 loading="lazy"
                             >
                             
-                            <!-- VIEWS BADGE (WITH EYE ICON) -->
+                            <!-- VIEWS BADGE -->
                             <div class="absolute top-2 left-2 bg-slate-900/70 backdrop-blur-sm text-white px-2 py-1 rounded-md text-[10px] font-medium flex items-center gap-1 shadow-sm">
                                 <svg class="w-3 h-3 text-slate-200" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
                                     <path stroke-linecap="round" stroke-linejoin="round" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"/>
@@ -662,15 +599,6 @@
                                 </svg>
                                 <span>${viewCount}</span>
                             </div>
-
-                            <!-- PREVIEW BUTTON -->
-                            <button 
-                                onclick="openPreview('${img.s3_key}', '${(img.reference || '').replace(/'/g, "\\'")}', event)"
-                                class="absolute top-2 right-2 bg-slate-900/60 hover:bg-slate-900/90 text-white p-1.5 rounded-lg opacity-0 group-hover:opacity-100 transition-opacity z-10"
-                                title="Expand Preview"
-                            >
-                                <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/><path stroke-linecap="round" stroke-linejoin="round" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"/></svg>
-                            </button>
                         </div>
 
                         <div class="p-3 flex-1 flex flex-col justify-between">
@@ -680,6 +608,7 @@
                             </div>
                             <div class="mt-2 pt-2 border-t border-slate-100 flex items-center justify-between text-[10px] text-slate-400 font-mono">
                                 <span class="truncate max-w-[120px]">${imgId}</span>
+                                <span class="text-sky-600 font-bold group-hover:underline">Inspect &rarr;</span>
                             </div>
                         </div>
                     </div>
@@ -697,9 +626,10 @@
                 workspace.innerHTML = `
                     <div class="h-full flex flex-col items-center justify-center text-center p-6 text-slate-400 my-12 md:my-auto">
                         <svg class="w-12 h-12 text-slate-300 mb-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"></path>
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"></path>
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"></path>
                         </svg>
-                        <p class="text-sm font-medium">Click on any image card to unlock the editing workspace properties.</p>
+                        <p class="text-sm font-medium">Click on any image card to inspect the large high-resolution view and edit verse metadata.</p>
                     </div>
                 `;
                 return;
@@ -707,41 +637,48 @@
 
             sidebar.classList.remove('translate-y-full');
             const imgId = img.image_id || img.id || '';
+            const fullImageUrl = `https://${CLOUDFRONT_DOMAIN}/${img.s3_key}`;
 
             workspace.innerHTML = `
-                <div class="space-y-4">
-                    <div class="flex items-center justify-between pb-3 border-b border-slate-200">
-                        <h3 class="text-sm font-bold text-slate-900 uppercase tracking-wider">Asset Properties</h3>
-                        <button onclick="deselectImage()" class="text-xs text-slate-400 hover:text-slate-600 font-bold cursor-pointer">Close</button>
+                <div class="space-y-4 flex flex-col h-full overflow-y-auto pr-1">
+                    <div class="flex items-center justify-between pb-3 border-b border-slate-200 shrink-0">
+                        <div>
+                            <h3 class="text-sm font-bold text-slate-900 uppercase tracking-wider">Asset Inspector</h3>
+                            <p class="text-[10px] text-slate-400 font-mono">${imgId}</p>
+                        </div>
+                        <button onclick="deselectImage()" class="text-xs text-slate-400 hover:text-slate-600 font-bold cursor-pointer p-1">Close &times;</button>
                     </div>
 
-                    <div class="aspect-video bg-slate-900 rounded-xl overflow-hidden relative border border-slate-200 shadow-sm p-1">
-                        <img src="https://${CLOUDFRONT_DOMAIN}/${img.s3_key}" class="w-full h-full object-contain" onerror="handleImageLoadError(this)">
+                    <!-- LARGE HIGH-RESOLUTION IMAGE VIEWER -->
+                    <div class="bg-black/90 rounded-2xl overflow-hidden relative border border-slate-800 shadow-inner flex flex-col items-center justify-center min-h-[260px] max-h-[340px] p-2 shrink-0">
+                        <div class="absolute top-2.5 right-2.5 z-10">
+                            <a href="${fullImageUrl}" target="_blank" class="bg-white/90 hover:bg-white text-slate-900 text-[11px] font-bold px-2.5 py-1.5 rounded-lg shadow flex items-center gap-1 transition-all" title="Open native high-res image">
+                                <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"/></svg>
+                                Full Tab
+                            </a>
+                        </div>
+                        <img src="${fullImageUrl}" class="max-h-[310px] w-full object-contain select-none rounded" onerror="handleImageLoadError(this)" oncontextmenu="return false;">
                     </div>
 
-                    <form id="edit-form" onsubmit="handleSaveImage(event)" class="space-y-3 text-left">
+                    <!-- METADATA EDIT FORM -->
+                    <form id="edit-form" onsubmit="handleSaveImage(event)" class="space-y-3 text-left pb-4">
                         <div>
-                            <label class="block text-[11px] font-extrabold text-slate-500 uppercase tracking-wider mb-1">Image ID</label>
-                            <input type="text" value="${imgId}" disabled class="w-full px-3 py-2 bg-slate-100 border border-slate-200 rounded-lg text-xs font-mono text-slate-500 cursor-not-allowed">
+                            <label class="block text-[10px] font-extrabold text-slate-400 uppercase tracking-wider mb-1">Image Filename</label>
+                            <input type="text" id="edit-filename" value="${img.current_filename || (img.s3_key || '').split('/').pop() || ''}" required class="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-xs font-mono text-slate-700 focus:bg-white focus:ring-2 focus:ring-sky-500 focus:outline-none">
                         </div>
 
                         <div>
-                            <label class="block text-[11px] font-extrabold text-slate-500 uppercase tracking-wider mb-1">Image Filename</label>
-                            <input type="text" id="edit-filename" value="${img.current_filename || (img.s3_key || '').split('/').pop() || ''}" required class="w-full px-3 py-2 bg-white border border-slate-300 rounded-lg text-xs font-mono text-slate-800 focus:ring-2 focus:ring-sky-500 focus:outline-none">
+                            <label class="block text-[10px] font-extrabold text-slate-400 uppercase tracking-wider mb-1">Bible Reference</label>
+                            <input type="text" id="edit-reference" value="${img.reference || ''}" class="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm font-bold text-slate-900 focus:bg-white focus:ring-2 focus:ring-sky-500 focus:outline-none">
                         </div>
 
                         <div>
-                            <label class="block text-[11px] font-extrabold text-slate-500 uppercase tracking-wider mb-1">Bible Reference</label>
-                            <input type="text" id="edit-reference" value="${img.reference || ''}" class="w-full px-3 py-2 bg-white border border-slate-300 rounded-lg text-xs font-semibold text-slate-800 focus:ring-2 focus:ring-sky-500 focus:outline-none">
+                            <label class="block text-[10px] font-extrabold text-slate-400 uppercase tracking-wider mb-1">Full Verse Text</label>
+                            <textarea id="edit-verse" rows="4" class="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs sm:text-sm text-slate-800 leading-relaxed focus:bg-white focus:ring-2 focus:ring-sky-500 focus:outline-none">${img.verse_text || ''}</textarea>
                         </div>
 
-                        <div>
-                            <label class="block text-[11px] font-extrabold text-slate-500 uppercase tracking-wider mb-1">Verse Text</label>
-                            <textarea id="edit-verse" rows="3" class="w-full px-3 py-2 bg-white border border-slate-300 rounded-lg text-xs text-slate-800 focus:ring-2 focus:ring-sky-500 focus:outline-none">${img.verse_text || ''}</textarea>
-                        </div>
-
-                        <div class="pt-2 flex gap-2">
-                            <button type="submit" id="save-btn" class="flex-1 bg-sky-500 hover:bg-sky-600 text-white text-xs font-bold py-2.5 px-4 rounded-xl shadow transition-all cursor-pointer">
+                        <div class="pt-2">
+                            <button type="submit" id="save-btn" class="w-full bg-sky-500 hover:bg-sky-600 active:bg-sky-700 text-white font-bold py-3 px-4 rounded-xl shadow-md text-xs sm:text-sm transition-all cursor-pointer">
                                 Save Changes
                             </button>
                         </div>
@@ -764,7 +701,6 @@
             };
 
             referenceInput.addEventListener('input', autoPopulateFilename);
-            autoPopulateFilename();
         }
 
         async function handleSaveImage(event) {
@@ -824,7 +760,7 @@
                     renderEditSidebar();
                     const refreshedSaveBtn = document.getElementById('save-btn');
                     if (refreshedSaveBtn) {
-                        refreshedSaveBtn.innerText = 'Saved!';
+                        refreshedSaveBtn.innerText = 'Saved Successfully!';
                         refreshedSaveBtn.disabled = true;
                     }
                     setTimeout(() => {
