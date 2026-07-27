@@ -188,6 +188,17 @@
                         >&times;</button>
                     </div>
 
+                    <!-- NEW: Filter Without Reference Button -->
+                    <button 
+                        type="button" 
+                        id="filter-missing-ref-btn" 
+                        onclick="toggleMissingReferenceFilter()" 
+                        class="shrink-0 bg-white hover:bg-slate-50 border border-slate-200 text-slate-700 font-bold px-4 py-2.5 rounded-xl text-xs shadow-sm transition-all cursor-pointer flex items-center gap-2"
+                    >
+                        <span id="missing-ref-indicator" class="w-2 h-2 rounded-full bg-slate-300"></span>
+                        <span>Needs Reference</span>
+                    </button>
+
                     <!-- SORT DROPDOWN -->
                     <div class="shrink-0 flex items-center bg-white border border-slate-200 rounded-xl px-3 py-1 shadow-sm focus-within:ring-2 focus-within:ring-sky-100 focus-within:border-sky-500 transition-all">
                         <label for="sort-select" class="text-xs font-bold text-slate-400 uppercase tracking-wider mr-2">Sort:</label>
@@ -239,7 +250,8 @@
             filteredImages: [],
             selectedImage: null,
             isSaving: false,
-            isUploading: false
+            isUploading: false,
+            showOnlyMissingReference: false
         };
 
         document.addEventListener('DOMContentLoaded', () => {
@@ -332,6 +344,23 @@
                 subtextEl.innerText = `${(file.size / 1024 / 1024).toFixed(2)} MB • Tap to change`;
                 dropzone.classList.add('border-sky-500', 'bg-sky-50/50');
             }
+        };
+
+        window.toggleMissingReferenceFilter = function() {
+            appState.showOnlyMissingReference = !appState.showOnlyMissingReference;
+            
+            const btn = document.getElementById('filter-missing-ref-btn');
+            const indicator = document.getElementById('missing-ref-indicator');
+
+            if (appState.showOnlyMissingReference) {
+                btn.className = "shrink-0 bg-amber-500 hover:bg-amber-600 border border-amber-600 text-white font-bold px-4 py-2.5 rounded-xl text-xs shadow-sm transition-all cursor-pointer flex items-center gap-2";
+                indicator.className = "w-2 h-2 rounded-full bg-white animate-pulse";
+            } else {
+                btn.className = "shrink-0 bg-white hover:bg-slate-50 border border-slate-200 text-slate-700 font-bold px-4 py-2.5 rounded-xl text-xs shadow-sm transition-all cursor-pointer flex items-center gap-2";
+                indicator.className = "w-2 h-2 rounded-full bg-slate-300";
+            }
+
+            executeDatabaseSearchFilter();
         };
 
         // NEW: Function to query backend database API for verse text
@@ -534,6 +563,11 @@
             }
 
             let results = appState.images.filter(img => {
+                if (appState.showOnlyMissingReference) {
+                    const hasRef = img.reference && img.reference.trim().length > 0;
+                    if (hasRef) return false;
+                }
+
                 if (!query) return true;
                 const ref = (img.reference || '').toLowerCase();
                 const verse = (img.verse_text || '').toLowerCase();
