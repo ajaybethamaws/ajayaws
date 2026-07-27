@@ -6,24 +6,28 @@
     <title>Verstantly Admin Dashboard</title>
     <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4"></script>
 </head>
-<body class="h-screen max-h-screen bg-slate-100 flex flex-col font-sans text-slate-800 overflow-hidden">
+<body class="h-screen max-h-screen bg-slate-100 flex flex-col font-sans text-slate-800 overflow-hidden antialiased">
 
     <!-- ADMIN LOGIN OVERLAY -->
     <div id="login-modal" class="fixed inset-0 bg-slate-900/95 backdrop-blur-md z-[100] flex items-center justify-center p-4">
         <div class="bg-white rounded-2xl shadow-2xl border border-slate-200 p-8 max-w-sm w-full text-center">
-            <div class="w-12 h-12 bg-sky-100 text-sky-600 rounded-full flex items-center justify-center mx-auto mb-4 font-bold text-xl">
-                🔒
+            <!-- S3 Root Dandelion Logo -->
+            <div class="w-16 h-16 bg-slate-900 rounded-2xl flex items-center justify-center mx-auto mb-4 p-2 shadow-lg overflow-hidden">
+                <img src="https://d15si3zl564vcw.cloudfront.net/logo.png" 
+                     alt="Verstantly Logo" 
+                     class="w-full h-full object-contain"
+                     onerror="handleLogoError(this)">
             </div>
-            <h2 class="text-xl font-bold text-slate-800 mb-1">Verstantly Admin</h2>
+            <h2 class="text-xl font-bold text-slate-900 mb-1">Verstantly Admin</h2>
             <p class="text-xs text-slate-500 mb-6">Enter administrative credentials to unlock workspace.</p>
             
             <form onsubmit="handleAdminLogin(event)" class="space-y-4">
-                <div>
+                <div class="space-y-3">
                     <input 
                         type="text" 
                         id="admin-username-input" 
                         placeholder="Username" 
-                        class="w-full px-4 py-2.5 border border-slate-300 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-sky-500 focus:border-sky-500 transition-all mb-3"
+                        class="w-full px-4 py-2.5 border border-slate-300 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-sky-500 focus:border-sky-500 transition-all"
                         required
                         autofocus
                     >
@@ -35,10 +39,10 @@
                         required
                     >
                 </div>
-                <p id="login-error" class="hidden text-xs text-red-600 font-medium">Invalid username or password.</p>
+                <p id="login-error" class="hidden text-xs text-red-600 font-semibold">Invalid username or password.</p>
                 <button 
                     type="submit" 
-                    class="w-full bg-slate-900 hover:bg-slate-800 text-white font-bold py-2.5 px-4 rounded-xl text-sm transition-all shadow-md"
+                    class="w-full bg-slate-900 hover:bg-slate-800 active:bg-slate-950 text-white font-bold py-2.5 px-4 rounded-xl text-sm transition-all shadow-md cursor-pointer"
                 >
                     Unlock Dashboard
                 </button>
@@ -46,26 +50,121 @@
         </div>
     </div>
 
-    <header class="bg-slate-900 text-white p-4 shadow-md shrink-0 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 z-50">
-        <div>
-            <h1 class="text-xl font-bold">Verstantly Content Management</h1>
-            <p class="text-xs text-slate-400 mt-0.5">Select any image card below to instantly modify descriptions and S3 metadata.</p>
+    <!-- UPLOAD IMAGE MODAL -->
+    <div id="upload-modal" class="hidden fixed inset-0 bg-slate-900/80 backdrop-blur-sm z-[90] flex items-center justify-center p-4 overflow-y-auto">
+        <div class="bg-white rounded-3xl shadow-2xl border border-slate-200 p-6 sm:p-8 max-w-lg w-full relative">
+            <!-- Close Button -->
+            <button type="button" onclick="closeUploadModal()" class="absolute top-5 right-5 text-slate-400 hover:text-slate-600 font-bold text-xl focus:outline-none cursor-pointer">&times;</button>
+
+            <!-- Modal Header with S3 Root Logo -->
+            <div class="text-center mb-6">
+                <div class="w-14 h-14 bg-slate-900 rounded-2xl flex items-center justify-center mx-auto mb-3 p-2 shadow-md overflow-hidden">
+                    <img src="https://d15si3zl564vcw.cloudfront.net/logo.png" 
+                         alt="Verstantly Logo" 
+                         class="w-full h-full object-contain"
+                         onerror="handleLogoError(this)">
+                </div>
+                <h3 class="text-xl font-bold text-slate-900">Publish New Verse</h3>
+                <p class="text-xs text-slate-500 mt-1">Upload your files instantly with a single touch.</p>
+            </div>
+
+            <div id="upload-status-alert" class="hidden p-3 rounded-xl text-xs font-semibold mb-4 text-center"></div>
+
+            <form id="upload-form" onsubmit="handleImageUpload(event)" class="space-y-5">
+                
+                <!-- SELECT CHANNEL LANGUAGE (PILLS) - RESTRICTED TO EN, TE, TA -->
+                <div>
+                    <label class="block text-[11px] font-extrabold text-sky-600 uppercase tracking-wider mb-2">Select Channel Language</label>
+                    <div id="language-pill-group" class="grid grid-cols-3 gap-2">
+                        <button type="button" onclick="selectLanguagePill('english', this)" class="lang-pill bg-sky-500 text-white font-bold py-2.5 px-3 rounded-xl text-xs transition-all shadow-sm cursor-pointer text-center">
+                            ENGLISH
+                        </button>
+                        <button type="button" onclick="selectLanguagePill('telugu', this)" class="lang-pill bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold py-2.5 px-3 rounded-xl text-xs transition-all cursor-pointer text-center">
+                            తెలుగు
+                        </button>
+                        <button type="button" onclick="selectLanguagePill('tamil', this)" class="lang-pill bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold py-2.5 px-3 rounded-xl text-xs transition-all cursor-pointer text-center">
+                            தமிழ்
+                        </button>
+                    </div>
+                    <!-- Hidden Input to store selected language value -->
+                    <input type="hidden" id="upload-language" value="english">
+                </div>
+
+                <!-- CHOOSE FILE (DASHED DROPZONE) -->
+                <div>
+                    <label class="block text-[11px] font-extrabold text-sky-600 uppercase tracking-wider mb-2">Choose File</label>
+                    
+                    <div onclick="document.getElementById('upload-file-input').click()" 
+                         id="dropzone"
+                         class="border-2 border-dashed border-slate-300 hover:border-sky-400 bg-slate-50/50 hover:bg-sky-50/30 rounded-2xl p-6 text-center cursor-pointer transition-all flex flex-col items-center justify-center min-h-[110px]">
+                        
+                        <span id="dropzone-text" class="text-xs font-bold text-slate-700 block">Tap to open Gallery / Camera</span>
+                        <span id="dropzone-subtext" class="text-[11px] text-slate-400 font-medium block mt-1">Supports JPEG, PNG, WEBP</span>
+                    </div>
+
+                    <input type="file" id="upload-file-input" accept="image/jpeg, image/jpg, image/png, image/webp" class="hidden" onchange="updateFilePreview(this)" required>
+                </div>
+
+                <!-- OPTIONAL BIBLE REFERENCE -->
+                <div>
+                    <label class="block text-[11px] font-extrabold text-slate-600 uppercase tracking-wider mb-1">Bible Reference <span class="text-slate-400 font-normal lowercase">(optional)</span></label>
+                    <input type="text" id="upload-reference" placeholder="e.g. Psalm 23:1" class="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-sky-500 focus:bg-white transition-all">
+                </div>
+
+                <!-- OPTIONAL SCRIPTURE VERSE TEXT -->
+                <div>
+                    <label class="block text-[11px] font-extrabold text-slate-600 uppercase tracking-wider mb-1">Scripture Verse Text <span class="text-slate-400 font-normal lowercase">(optional)</span></label>
+                    <textarea id="upload-verse" rows="2" placeholder="Type full scripture text..." class="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-sky-500 focus:bg-white transition-all"></textarea>
+                </div>
+
+                <!-- SUBMIT BUTTON -->
+                <button type="submit" id="upload-btn" class="w-full bg-sky-500 hover:bg-sky-600 active:bg-sky-700 text-white font-bold py-3 px-4 rounded-xl text-sm transition-all shadow-md cursor-pointer mt-2">
+                    Upload Instantly
+                </button>
+            </form>
+        </div>
+    </div>
+
+    <!-- HEADER -->
+    <header class="bg-slate-900 text-white p-4 shadow-md shrink-0 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 z-30">
+        <div class="flex items-center gap-3">
+            <!-- Header S3 Root Logo -->
+            <div class="w-9 h-9 bg-slate-800 border border-slate-700 rounded-xl flex items-center justify-center p-1 shrink-0 overflow-hidden">
+                <img src="https://d15si3zl564vcw.cloudfront.net/logo.png" 
+                     alt="Verstantly Logo" 
+                     class="w-full h-full object-contain"
+                     onerror="handleLogoError(this)">
+            </div>
+            <div>
+                <h1 class="text-xl font-bold tracking-tight">Verstantly Content Management</h1>
+                <p class="text-xs text-slate-400 mt-0.5">Select any image card below to modify descriptions and S3 metadata.</p>
+            </div>
         </div>
         
-        <div class="flex items-center gap-4 bg-slate-800 border border-slate-700 rounded-lg px-4 py-2 text-xs font-medium text-slate-300 shadow-inner self-start sm:self-auto">
-            <span class="text-slate-400 font-bold border-r border-slate-700 pr-3 uppercase tracking-wider">Vault Stats</span>
-            <div>EN: <span id="count-english" class="text-sky-400 font-bold font-mono">...</span></div>
-            <div>TE: <span id="count-telugu" class="text-sky-400 font-bold font-mono">...</span></div>
-            <div>TA: <span id="count-tamil" class="text-sky-400 font-bold font-mono">...</span></div>
+        <div class="flex items-center gap-3 self-start sm:self-auto flex-wrap">
+            <button onclick="openUploadModal()" class="bg-sky-500 hover:bg-sky-600 active:bg-sky-700 text-white text-xs font-bold px-4 py-2 rounded-xl transition-all shadow-md flex items-center gap-1.5 cursor-pointer">
+                <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M12 4.5v15m7.5-7.5h-15"/></svg>
+                Upload Image
+            </button>
+
+            <div class="flex items-center gap-4 bg-slate-800/80 border border-slate-700/80 rounded-xl px-4 py-2 text-xs font-medium text-slate-300 shadow-inner">
+                <span class="text-slate-400 font-bold border-r border-slate-700 pr-3 uppercase tracking-wider text-[10px]">Vault Stats</span>
+                <div>EN: <span id="count-english" class="text-sky-400 font-bold font-mono">...</span></div>
+                <div>TE: <span id="count-telugu" class="text-sky-400 font-bold font-mono">...</span></div>
+                <div>TA: <span id="count-tamil" class="text-sky-400 font-bold font-mono">...</span></div>
+            </div>
         </div>
     </header>
 
+    <!-- MAIN DASHBOARD CONTENT AREA -->
     <div class="flex-1 flex flex-col md:flex-row overflow-hidden relative">
         
+        <!-- MAIN GALLERY CONTAINER -->
         <div class="flex-1 flex flex-col relative overflow-hidden bg-slate-50 h-full">
             
-            <div id="preview-modal" class="hidden absolute inset-0 bg-slate-900/85 backdrop-blur-sm z-50 flex flex-col items-center justify-center p-4 transition-all duration-200">
-                <button onclick="closePreview()" class="absolute top-4 right-4 bg-white/10 hover:bg-white/20 text-white font-bold p-2.5 rounded-full shadow transition-all focus:outline-none z-50">
+            <!-- OPTIONAL ENLARGED PREVIEW MODAL -->
+            <div id="preview-modal" class="hidden fixed inset-0 bg-slate-950/90 backdrop-blur-md z-50 flex flex-col items-center justify-center p-4 transition-all duration-200">
+                <button type="button" onclick="closePreview(event)" class="absolute top-4 right-4 bg-white/10 hover:bg-white/20 text-white font-bold p-2.5 rounded-full shadow transition-all focus:outline-none z-50 cursor-pointer">
                     <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path></svg>
                 </button>
                 
@@ -81,8 +180,9 @@
 
             <main class="flex-1 p-4 md:p-6 overflow-y-auto h-full min-w-0">
                 
-                <div class="mb-5 max-w-full relative">
-                    <div class="relative flex items-center">
+                <!-- SEARCH & SORT CONTROLS -->
+                <div class="mb-5 max-w-full flex flex-col sm:flex-row gap-3">
+                    <div class="relative flex-1 flex items-center">
                         <span class="absolute left-4 text-slate-400">
                             <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/></svg>
                         </span>
@@ -90,31 +190,48 @@
                             type="text" 
                             id="adminSearchInput" 
                             placeholder="Search image records by reference, text, ID, or file parameters..." 
-                            class="w-full pl-11 pr-10 py-2.5 bg-white border border-slate-200 rounded-xl text-sm text-slate-800 placeholder-slate-400 shadow-sm outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100 transition-all"
-                            oninput="executeDatabaseSearchFilter(this.value)"
+                            class="w-full pl-11 pr-10 py-2.5 bg-white border border-slate-200 rounded-xl text-sm text-slate-800 placeholder-slate-400 shadow-sm outline-none focus:border-sky-500 focus:ring-2 focus:ring-sky-100 transition-all"
+                            oninput="executeDatabaseSearchFilter()"
                         >
                         <button 
                             id="clearSearchBtn" 
                             onclick="clearActiveSearch()" 
-                            class="hidden absolute right-3 text-slate-400 hover:text-slate-600 text-lg font-bold select-none focus:outline-none"
+                            class="hidden absolute right-3 text-slate-400 hover:text-slate-600 text-lg font-bold select-none focus:outline-none cursor-pointer"
                         >&times;</button>
+                    </div>
+
+                    <!-- SORT DROPDOWN -->
+                    <div class="shrink-0 flex items-center bg-white border border-slate-200 rounded-xl px-3 py-1 shadow-sm focus-within:ring-2 focus-within:ring-sky-100 focus-within:border-sky-500 transition-all">
+                        <label for="sort-select" class="text-xs font-bold text-slate-400 uppercase tracking-wider mr-2">Sort:</label>
+                        <select id="sort-select" onchange="executeDatabaseSearchFilter()" class="bg-transparent text-xs font-bold text-slate-700 outline-none py-1.5 cursor-pointer">
+                            <option value="newest">Newest First</option>
+                            <option value="oldest">Oldest First</option>
+                            <option value="views-desc">Most Views</option>
+                            <option value="views-asc">Least Views</option>
+                        </select>
                     </div>
                 </div>
 
-                <h2 class="text-lg font-bold text-slate-800 mb-4">Your Image Assets</h2>
+                <h2 class="text-base font-bold text-slate-800 mb-4 tracking-tight">Your Image Assets</h2>
+                
+                <!-- GRID DISPLAY -->
                 <div id="image-grid" class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-4 pb-24 md:pb-12">
-                    <p class="text-sm text-slate-500 col-span-full">Loading image vault...</p>
+                    <div class="col-span-full py-12 text-center">
+                        <div class="inline-block animate-spin rounded-full h-8 w-8 border-4 border-sky-500 border-t-transparent mb-3"></div>
+                        <p class="text-sm text-slate-500 font-medium">Loading image vault...</p>
+                    </div>
                 </div>
             </main>
         </div>
 
-        <aside id="edit-sidebar" class="fixed inset-x-0 bottom-0 transform translate-y-full md:translate-y-0 md:static w-full md:w-[400px] bg-white border-t md:border-t-0 md:border-l border-slate-200 shadow-2xl md:shadow-xl p-6 flex flex-col overflow-y-auto max-h-[85vh] md:max-h-full h-auto md:h-full shrink-0 transition-transform duration-300 ease-in-out z-40">
+        <!-- EDIT WORKSPACE SIDEBAR -->
+        <aside id="edit-sidebar" class="fixed inset-x-0 bottom-0 transform translate-y-full md:translate-y-0 md:static w-full md:w-[400px] bg-white border-t md:border-t-0 md:border-l border-slate-200 shadow-2xl md:shadow-none p-6 flex flex-col overflow-y-auto max-h-[85vh] md:max-h-full h-auto md:h-full shrink-0 transition-transform duration-300 ease-in-out z-40">
             <div class="w-12 h-1.5 bg-slate-300 rounded-full mx-auto mb-4 md:hidden"></div>
             
-            <div id="edit-workspace" class="h-full">
-                <div class="h-full flex flex-col items-center justify-center text-center p-6 text-slate-400 my-12 md:mt-20">
+            <div id="edit-workspace" class="h-full flex flex-col justify-between">
+                <div class="h-full flex flex-col items-center justify-center text-center p-6 text-slate-400 my-12 md:my-auto">
                     <svg class="w-12 h-12 text-slate-300 mb-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"></path>
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"></path>
                     </svg>
                     <p class="text-sm font-medium">Click on any image card to unlock the editing workspace properties.</p>
                 </div>
@@ -122,13 +239,35 @@
         </aside>
     </div>
 
+    <!-- JAVASCRIPT LOGIC -->
     <script>
         const API_BASE_URL = 'https://llmix4d7q6.execute-api.us-east-1.amazonaws.com'; 
         const CLOUDFRONT_DOMAIN = 'd15si3zl564vcw.cloudfront.net';
-
         const REQUIRED_USERNAME = 'verstantly.admin';
 
-        // Calculates dynamic daily password in InitCap format (e.g. Wednesday@123)
+        let appState = {
+            images: [],
+            filteredImages: [],
+            selectedImage: null,
+            isSaving: false,
+            isUploading: false
+        };
+
+        document.addEventListener('DOMContentLoaded', () => {
+            checkAuthSession();
+        });
+
+        // Automatic fallback for the S3 logo format (.png -> .jpg -> .jpeg)
+        window.handleLogoError = function(imgEl) {
+            if (imgEl.src.endsWith('.png')) {
+                imgEl.src = `https://${CLOUDFRONT_DOMAIN}/logo.jpg`;
+            } else if (imgEl.src.endsWith('.jpg')) {
+                imgEl.src = `https://${CLOUDFRONT_DOMAIN}/logo.jpeg`;
+            } else if (imgEl.src.endsWith('.jpeg')) {
+                imgEl.src = `https://${CLOUDFRONT_DOMAIN}/logo.PNG`;
+            }
+        };
+
         function getExpectedPassword() {
             const days = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
             const todayIndex = new Date().getDay();
@@ -153,9 +292,7 @@
             const inputPass = document.getElementById('admin-password-input').value.trim();
             const errorMsg = document.getElementById('login-error');
 
-            const expectedPass = getExpectedPassword();
-
-            if (inputUser === REQUIRED_USERNAME && inputPass === expectedPass) {
+            if (inputUser === REQUIRED_USERNAME && inputPass === getExpectedPassword()) {
                 sessionStorage.setItem('verstantly_admin_authenticated', 'true');
                 document.getElementById('login-modal').classList.add('hidden');
                 errorMsg.classList.add('hidden');
@@ -166,11 +303,116 @@
             }
         }
 
-        let appState = {
-            images: [],
-            filteredImages: [],
-            selectedImage: null,
-            isSaving: false
+        window.openUploadModal = function() {
+            document.getElementById('upload-modal').classList.remove('hidden');
+        };
+
+        window.closeUploadModal = function() {
+            document.getElementById('upload-modal').classList.add('hidden');
+            document.getElementById('upload-form').reset();
+            document.getElementById('upload-status-alert').classList.add('hidden');
+
+            // Reset Dropzone visual state
+            document.getElementById('dropzone-text').innerText = 'Tap to open Gallery / Camera';
+            document.getElementById('dropzone-text').className = 'text-xs font-bold text-slate-700 block';
+            document.getElementById('dropzone-subtext').innerText = 'Supports JPEG, PNG, WEBP';
+            document.getElementById('dropzone').classList.remove('border-sky-500', 'bg-sky-50/50');
+
+            // Reset Language Pill to default (English)
+            const firstPill = document.querySelector('.lang-pill');
+            if (firstPill) selectLanguagePill('english', firstPill);
+        };
+
+        window.selectLanguagePill = function(langValue, element) {
+            document.getElementById('upload-language').value = langValue;
+            
+            const pills = document.querySelectorAll('.lang-pill');
+            pills.forEach(pill => {
+                pill.className = 'lang-pill bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold py-2.5 px-3 rounded-xl text-xs transition-all cursor-pointer text-center';
+            });
+
+            element.className = 'lang-pill bg-sky-500 text-white font-bold py-2.5 px-3 rounded-xl text-xs transition-all shadow-sm cursor-pointer text-center';
+        };
+
+        window.updateFilePreview = function(input) {
+            const textEl = document.getElementById('dropzone-text');
+            const subtextEl = document.getElementById('dropzone-subtext');
+            const dropzone = document.getElementById('dropzone');
+
+            if (input.files && input.files[0]) {
+                const file = input.files[0];
+                textEl.innerText = `Selected: ${file.name}`;
+                textEl.className = "text-xs font-bold text-sky-600 truncate max-w-[280px] block";
+                subtextEl.innerText = `${(file.size / 1024 / 1024).toFixed(2)} MB • Tap to change`;
+                dropzone.classList.add('border-sky-500', 'bg-sky-50/50');
+            }
+        };
+
+        window.handleImageUpload = async function(e) {
+            e.preventDefault();
+            if (appState.isUploading) return;
+
+            const uploadBtn = document.getElementById('upload-btn');
+            const alertBox = document.getElementById('upload-status-alert');
+            const fileInput = document.getElementById('upload-file-input');
+            const file = fileInput.files[0];
+
+            if (!file) return;
+
+            appState.isUploading = true;
+            uploadBtn.innerText = 'Uploading to AWS S3...';
+            uploadBtn.disabled = true;
+
+            const language = document.getElementById('upload-language').value;
+            const reference = document.getElementById('upload-reference').value;
+            const verseText = document.getElementById('upload-verse').value;
+
+            try {
+                const reader = new FileReader();
+                reader.readAsDataURL(file);
+                reader.onload = async function () {
+                    const base64Content = reader.result.split(',')[1];
+
+                    const payload = {
+                        language: language,
+                        filename: file.name,
+                        file_type: file.type,
+                        reference: reference,
+                        verse_text: verseText,
+                        image_data: base64Content
+                    };
+
+                    const response = await fetch(`${API_BASE_URL}/images/upload`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(payload)
+                    });
+
+                    const result = await response.json();
+
+                    if (result.success || response.ok) {
+                        alertBox.className = "p-3 rounded-xl text-xs font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200 block";
+                        alertBox.innerText = "Image uploaded successfully!";
+                        setTimeout(() => {
+                            closeUploadModal();
+                            loadGallery();
+                        }, 1000);
+                    } else {
+                        alertBox.className = "p-3 rounded-xl text-xs font-semibold bg-rose-50 text-rose-700 border border-rose-200 block";
+                        alertBox.innerText = result.message || "Failed to upload image.";
+                    }
+
+                    appState.isUploading = false;
+                    uploadBtn.innerText = 'Upload Instantly';
+                    uploadBtn.disabled = false;
+                };
+            } catch (err) {
+                alertBox.className = "p-3 rounded-xl text-xs font-semibold bg-rose-50 text-rose-700 border border-rose-200 block";
+                alertBox.innerText = "Network failure during upload.";
+                appState.isUploading = false;
+                uploadBtn.innerText = 'Upload Instantly';
+                uploadBtn.disabled = false;
+            }
         };
 
         window.handleImageLoadError = function(imgElement) {
@@ -187,7 +429,7 @@
             } else if (originalSrc.endsWith('.jpg')) {
                 imgElement.src = originalSrc.replace(/\.jpg$/, '.JPG');
             } else if (originalSrc.endsWith('.JPEG')) {
-                imgElement.src = originalSrc.replace(/\.JPEG$/, '.jpeg');
+                imgElement.src = originalSrc.replace(/\.jpeg$/, '.jpeg');
             } else if (originalSrc.endsWith('.jpeg')) {
                 imgElement.src = originalSrc.replace(/\.jpeg$/, '.JPEG');
             } else {
@@ -196,21 +438,15 @@
         };
 
         function calculateLanguageMetrics() {
-            let english = 0;
-            let telugu = 0;
-            let tamil = 0;
+            let english = 0, telugu = 0, tamil = 0;
 
             appState.images.forEach(img => {
                 if (!img.s3_key) return;
                 const lowerKey = img.s3_key.toLowerCase();
                 
-                if (lowerKey.startsWith('telugu/')) {
-                    telugu++;
-                } else if (lowerKey.startsWith('tamil/')) {
-                    tamil++;
-                } else if (lowerKey.startsWith('english/') || !lowerKey.includes('/')) {
-                    english++;
-                }
+                if (lowerKey.startsWith('telugu/')) telugu++;
+                else if (lowerKey.startsWith('tamil/')) tamil++;
+                else if (lowerKey.startsWith('english/') || !lowerKey.includes('/')) english++;
             });
 
             document.getElementById('count-english').innerText = english;
@@ -223,227 +459,305 @@
                 const response = await fetch(`${API_BASE_URL}/images`);
                 const data = await response.json();
                 appState.images = data.images || [];
-                appState.filteredImages = [...appState.images];
                 
                 calculateLanguageMetrics();
-                renderGrid();
+                executeDatabaseSearchFilter();
             } catch (err) {
                 document.getElementById('image-grid').innerHTML = `
-                    <p class="text-sm text-red-600 col-span-full font-medium">Could not load your image library from AWS. Check API connection.</p>
+                    <div class="col-span-full p-4 rounded-xl bg-red-50 border border-red-200 text-red-700 text-sm font-medium">
+                        Could not load your image library from AWS. Please check network connection or API setup.
+                    </div>
                 `;
             }
         }
 
+        /**
+         * Replicates Lambda sorting:
+         * tuple(sort_value, id, s3_key) in DESCENDING order
+         */
+        function sortLikeLambda(items, reverse = true) {
+            return [...items].sort((a, b) => {
+                const getSortVal = (item) => 
+                    item.sort_value ?? item.created_at ?? item.timestamp ?? item.date ?? '';
+
+                const aVal = String(getSortVal(a));
+                const bVal = String(getSortVal(b));
+
+                // 1. Primary: sort_value
+                if (aVal !== bVal) {
+                    const comp = aVal.localeCompare(bVal, undefined, { numeric: true });
+                    return reverse ? -comp : comp;
+                }
+
+                // 2. Secondary: image_id / id
+                const aId = String(a.image_id || a.id || '');
+                const bId = String(b.image_id || b.id || '');
+                if (aId !== bId) {
+                    const comp = aId.localeCompare(bId, undefined, { numeric: true });
+                    return reverse ? -comp : comp;
+                }
+
+                // 3. Tertiary: s3_key
+                const aKey = String(a.s3_key || '');
+                const bKey = String(b.s3_key || '');
+                const comp = aKey.localeCompare(bKey, undefined, { numeric: true });
+                return reverse ? -comp : comp;
+            });
+        }
+
+        function executeDatabaseSearchFilter() {
+            const query = (document.getElementById('adminSearchInput')?.value || '').toLowerCase().trim();
+            const sortMode = document.getElementById('sort-select')?.value || 'newest';
+            const clearBtn = document.getElementById('clearSearchBtn');
+
+            if (clearBtn) {
+                clearBtn.classList.toggle('hidden', query.length === 0);
+            }
+
+            // 1. Filter
+            let results = appState.images.filter(img => {
+                if (!query) return true;
+                const ref = (img.reference || '').toLowerCase();
+                const verse = (img.verse_text || '').toLowerCase();
+                const id = (img.image_id || img.id || '').toLowerCase();
+                const key = (img.s3_key || '').toLowerCase();
+                return ref.includes(query) || verse.includes(query) || id.includes(query) || key.includes(query);
+            });
+
+            // 2. Sort according to Lambda Tuple logic
+            if (sortMode === 'newest') {
+                results = sortLikeLambda(results, true);
+            } else if (sortMode === 'oldest') {
+                results = sortLikeLambda(results, false);
+            } else if (sortMode === 'views-desc') {
+                results.sort((a, b) => (Number(b.views) || 0) - (Number(a.views) || 0));
+            } else if (sortMode === 'views-asc') {
+                results.sort((a, b) => (Number(a.views) || 0) - (Number(b.views) || 0));
+            }
+
+            appState.filteredImages = results;
+            renderGrid();
+        }
+
+        function selectImage(imageId) {
+            const found = appState.images.find(img => (img.image_id || img.id) === imageId);
+            if (!found) return;
+
+            appState.selectedImage = found;
+            renderGrid();
+            renderEditSidebar();
+        }
+
+        function deselectImage() {
+            appState.selectedImage = null;
+            renderGrid();
+            renderEditSidebar();
+        }
+
+        function clearActiveSearch() {
+            const input = document.getElementById('adminSearchInput');
+            if (input) input.value = '';
+            executeDatabaseSearchFilter();
+        }
+
+        function openPreview(s3Key, reference, event) {
+            if (event) event.stopPropagation();
+            const modal = document.getElementById('preview-modal');
+            const img = document.getElementById('modal-image-view');
+            const ref = document.getElementById('modal-reference-view');
+
+            img.src = `https://${CLOUDFRONT_DOMAIN}/${s3Key}`;
+            ref.innerText = reference || 'Unreferenced Asset';
+            modal.classList.remove('hidden');
+        }
+
+        function closePreview(event) {
+            if (event) event.stopPropagation();
+            document.getElementById('preview-modal').classList.add('hidden');
+        }
+
         function renderGrid() {
             const grid = document.getElementById('image-grid');
+
             if (appState.filteredImages.length === 0) {
-                grid.innerHTML = '<p class="text-sm text-slate-500 col-span-full">No matching image assets found.</p>';
+                grid.innerHTML = `
+                    <div class="col-span-full py-16 text-center bg-white rounded-2xl border border-slate-200">
+                        <svg class="w-10 h-10 text-slate-300 mx-auto mb-2" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/></svg>
+                        <p class="text-sm font-bold text-slate-700">No matching image records</p>
+                        <p class="text-xs text-slate-400 mt-1">Try refining your search terms or filters.</p>
+                    </div>
+                `;
                 return;
             }
 
             grid.innerHTML = appState.filteredImages.map(img => {
-                const isSelected = appState.selectedImage?.image_id === img.image_id;
-                const viewCount = img.views || 0;
+                const imgId = img.image_id || img.id || '';
+                const isSelected = appState.selectedImage && (appState.selectedImage.image_id || appState.selectedImage.id) === imgId;
+                const viewCount = img.views ?? 0;
                 
                 return `
-                    <div onclick="selectImage('${img.image_id}')" 
-                         class="cursor-pointer bg-white rounded-xl overflow-hidden shadow-sm border-2 transition-all hover:scale-[1.01] ${isSelected ? 'border-blue-600 ring-2 ring-blue-100' : 'border-slate-200'}">
-                        <div class="aspect-video bg-slate-200 relative overflow-hidden select-none">
-                            <img src="https://${CLOUDFRONT_DOMAIN}/${img.s3_key}" 
-                                 class="w-full h-full object-cover select-none pointer-events-none" 
-                                 onerror="handleImageLoadError(this)"
-                                 oncontextmenu="return false;"
-                                 ondragstart="return false;">
+                    <div 
+                        onclick="selectImage('${imgId}')" 
+                        class="group bg-white rounded-2xl border ${isSelected ? 'border-sky-500 ring-2 ring-sky-100 shadow-md' : 'border-slate-200 hover:border-slate-300'} overflow-hidden cursor-pointer transition-all duration-200 flex flex-col relative"
+                    >
+                        <div class="aspect-square bg-slate-100 relative overflow-hidden">
+                            <img 
+                                src="https://${CLOUDFRONT_DOMAIN}/${img.s3_key}" 
+                                alt="${img.reference || 'Bible Verse'}" 
+                                class="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
+                                onerror="handleImageLoadError(this)"
+                                loading="lazy"
+                            >
                             
-                            <div class="absolute top-2 left-2 bg-slate-900/70 backdrop-blur text-[10px] font-bold text-white px-2 py-0.5 rounded-full flex items-center gap-1 z-20 select-none">
-                                <svg class="w-3 h-3 text-sky-400" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/><path stroke-linecap="round" stroke-linejoin="round" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"/></svg>
+                            <!-- VIEWS BADGE (WITH EYE ICON) -->
+                            <div class="absolute top-2 left-2 bg-slate-900/70 backdrop-blur-sm text-white px-2 py-1 rounded-md text-[10px] font-medium flex items-center gap-1 shadow-sm">
+                                <svg class="w-3 h-3 text-slate-200" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"/>
+                                    <path stroke-linecap="round" stroke-linejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/>
+                                </svg>
                                 <span>${viewCount}</span>
                             </div>
 
-                            <div class="absolute inset-0 z-10 bg-transparent select-none" oncontextmenu="return false;" ondragstart="return false;"></div>
+                            <!-- PREVIEW BUTTON -->
+                            <button 
+                                onclick="openPreview('${img.s3_key}', '${(img.reference || '').replace(/'/g, "\\'")}', event)"
+                                class="absolute top-2 right-2 bg-slate-900/60 hover:bg-slate-900/90 text-white p-1.5 rounded-lg opacity-0 group-hover:opacity-100 transition-opacity z-10"
+                                title="Expand Preview"
+                            >
+                                <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/><path stroke-linecap="round" stroke-linejoin="round" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"/></svg>
+                            </button>
                         </div>
-                        <div class="p-3">
-                            <p class="text-xs font-mono font-bold text-slate-700 truncate">${img.current_filename}</p>
-                            <p class="text-xs text-slate-500 mt-1 font-semibold truncate">${img.reference || '⚠️ No Reference'}</p>
+
+                        <div class="p-3 flex-1 flex flex-col justify-between">
+                            <div>
+                                <p class="text-xs font-bold text-slate-800 truncate">${img.reference || 'Untitled Verse'}</p>
+                                <p class="text-[11px] text-slate-500 line-clamp-2 mt-0.5">${img.verse_text || 'No text snippet added...'}</p>
+                            </div>
+                            <div class="mt-2 pt-2 border-t border-slate-100 flex items-center justify-between text-[10px] text-slate-400 font-mono">
+                                <span class="truncate max-w-[120px]">${imgId}</span>
+                            </div>
                         </div>
                     </div>
                 `;
             }).join('');
         }
 
-        window.executeDatabaseSearchFilter = function(query) {
-            const searchTerm = query.toLowerCase().trim();
-            const clearBtn = document.getElementById('clearSearchBtn');
-
-            clearBtn.style.display = searchTerm ? 'block' : 'none';
-
-            if (!searchTerm) {
-                appState.filteredImages = [...appState.images];
-            } else {
-                appState.filteredImages = appState.images.filter(img => {
-                    return (
-                        (img.image_id || '').toLowerCase().includes(searchTerm) ||
-                        (img.reference || '').toLowerCase().includes(searchTerm) ||
-                        (img.verse_text || '').toLowerCase().includes(searchTerm) ||
-                        (img.current_filename || '').toLowerCase().includes(searchTerm) ||
-                        (img.s3_key || '').toLowerCase().includes(searchTerm)
-                    );
-                });
-            }
-            renderGrid();
-        };
-
-        window.clearActiveSearch = function() {
-            const input = document.getElementById('adminSearchInput');
-            input.value = '';
-            executeDatabaseSearchFilter('');
-            input.focus();
-        };
-
-        window.selectImage = function(id) {
-            const img = appState.images.find(i => i.image_id === id);
-            appState.selectedImage = img;
-            renderGrid();
-            renderForm();
-            
-            document.getElementById('edit-sidebar').classList.remove('translate-y-full');
-            
-            const modalImg = document.getElementById('modal-image-view');
-            modalImg.removeAttribute('data-fallback-attempted'); 
-            modalImg.src = `https://${CLOUDFRONT_DOMAIN}/${img.s3_key}`;
-            
-            document.getElementById('modal-reference-view').innerText = img.reference ? `PATH: ${img.s3_key} (${img.reference})` : `PATH: ${img.s3_key}`;
-            document.getElementById('preview-modal').classList.remove('hidden');
-        };
-
-        window.closePreview = function() {
-            document.getElementById('preview-modal').classList.add('hidden');
-        };
-
-        window.dismissWorkspace = function() {
-            document.getElementById('edit-sidebar').classList.add('translate-y-full');
-            appState.selectedImage = null;
-            renderGrid();
-        };
-
-        document.getElementById('preview-modal').addEventListener('click', function(e) {
-            if (e.target === this) closePreview();
-        });
-
-        function renderForm() {
-            const panel = document.getElementById('edit-workspace');
+        function renderEditSidebar() {
+            const workspace = document.getElementById('edit-workspace');
+            const sidebar = document.getElementById('edit-sidebar');
             const img = appState.selectedImage;
-            const viewCount = img.views || 0;
 
-            panel.innerHTML = `
-                <form id="metadata-form" onsubmit="saveMetadata(event)" class="space-y-5">
-                    <div class="flex items-center justify-between border-b border-slate-200 pb-3">
+            if (!img) {
+                sidebar.classList.add('translate-y-full');
+                workspace.innerHTML = `
+                    <div class="h-full flex flex-col items-center justify-center text-center p-6 text-slate-400 my-12 md:my-auto">
+                        <svg class="w-12 h-12 text-slate-300 mb-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"></path>
+                        </svg>
+                        <p class="text-sm font-medium">Click on any image card to unlock the editing workspace properties.</p>
+                    </div>
+                `;
+                return;
+            }
+
+            sidebar.classList.remove('translate-y-full');
+            const imgId = img.image_id || img.id || '';
+
+            workspace.innerHTML = `
+                <div class="space-y-4">
+                    <div class="flex items-center justify-between pb-3 border-b border-slate-200">
+                        <h3 class="text-sm font-bold text-slate-900 uppercase tracking-wider">Asset Properties</h3>
+                        <button onclick="deselectImage()" class="text-xs text-slate-400 hover:text-slate-600 font-bold cursor-pointer">Close</button>
+                    </div>
+
+                    <div class="aspect-video bg-slate-900 rounded-xl overflow-hidden relative border border-slate-200 shadow-sm">
+                        <img src="https://${CLOUDFRONT_DOMAIN}/${img.s3_key}" class="w-full h-full object-cover" onerror="handleImageLoadError(this)">
+                    </div>
+
+                    <form id="edit-form" onsubmit="handleSaveImage(event)" class="space-y-3 text-left">
                         <div>
-                            <h3 class="text-lg font-bold text-slate-900">Modify Image Data</h3>
-                            <div class="flex items-center gap-2 mt-1 flex-wrap">
-                                <span class="text-xs font-mono bg-slate-100 px-2 py-0.5 rounded text-slate-500">ID: ${img.image_id}</span>
-                                <span class="text-xs font-bold bg-sky-50 border border-sky-200 px-2 py-0.5 rounded text-sky-700 flex items-center gap-1">
-                                    Total Views: ${viewCount}
-                                </span>
-                            </div>
+                            <label class="block text-[11px] font-extrabold text-slate-500 uppercase tracking-wider mb-1">Image ID</label>
+                            <input type="text" value="${imgId}" disabled class="w-full px-3 py-2 bg-slate-100 border border-slate-200 rounded-lg text-xs font-mono text-slate-500 cursor-not-allowed">
                         </div>
-                        <button type="button" onclick="dismissWorkspace()" class="md:hidden text-xs font-bold text-slate-500 bg-slate-100 hover:bg-slate-200 px-3 py-1.5 rounded-lg transition-colors">
-                            Done
-                        </button>
-                    </div>
 
-                    <div id="status-alert" class="hidden p-3 rounded-lg text-xs font-medium"></div>
+                        <div>
+                            <label class="block text-[11px] font-extrabold text-slate-500 uppercase tracking-wider mb-1">Bible Reference</label>
+                            <input type="text" id="edit-reference" value="${img.reference || ''}" class="w-full px-3 py-2 bg-white border border-slate-300 rounded-lg text-xs font-semibold text-slate-800 focus:ring-2 focus:ring-sky-500 focus:outline-none">
+                        </div>
 
-                    <div>
-                        <label class="block text-xs font-bold text-slate-700 uppercase tracking-wide mb-1">Bible Reference</label>
-                        <input type="text" id="form-reference" value="${img.reference || ''}" placeholder="e.g. John 3:16" class="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm focus:outline-none focus:border-blue-500" required>
-                    </div>
+                        <div>
+                            <label class="block text-[11px] font-extrabold text-slate-500 uppercase tracking-wider mb-1">Verse Text</label>
+                            <textarea id="edit-verse" rows="3" class="w-full px-3 py-2 bg-white border border-slate-300 rounded-lg text-xs text-slate-800 focus:ring-2 focus:ring-sky-500 focus:outline-none">${img.verse_text || ''}</textarea>
+                        </div>
 
-                    <div>
-                        <label class="block text-xs font-bold text-slate-700 uppercase tracking-wide mb-1">Image Filename</label>
-                        <input type="text" id="form-filename" value="${img.current_filename || ''}" placeholder="john-3-16-scenery.jpg" class="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm font-mono focus:outline-none focus:border-blue-500" required>
-                    </div>
-
-                    <div>
-                        <label class="block text-xs font-bold text-slate-700 uppercase tracking-wide mb-1">Scripture Description (Verse Text)</label>
-                        <textarea id="form-verse" rows="4" placeholder="Type full verse text here..." class="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm focus:outline-none focus:border-blue-500" required>${img.verse_text || ''}</textarea>
-                    </div>
-
-                    <div class="pt-2 flex gap-2">
-                        <button type="button" onclick="closePreview()" class="px-3 py-2 border border-slate-300 hover:bg-slate-50 text-slate-700 rounded-lg text-sm font-medium transition-colors">
-                            View Image
-                        </button>
-                        <button type="submit" id="save-btn" class="flex-1 bg-blue-600 hover:bg-blue-700 text-white font-bold py-2.5 px-4 rounded-lg text-sm transition-colors shadow">
-                            Save Changes
-                        </button>
-                    </div>
-                </form>
+                        <div class="pt-2 flex gap-2">
+                            <button type="submit" id="save-btn" class="flex-1 bg-sky-500 hover:bg-sky-600 text-white text-xs font-bold py-2.5 px-4 rounded-xl shadow transition-all cursor-pointer">
+                                Save Changes
+                            </button>
+                        </div>
+                    </form>
+                </div>
             `;
         }
 
-        window.saveMetadata = async function(e) {
-            e.preventDefault();
-            if (appState.isSaving) return;
+        async function handleSaveImage(event) {
+            event.preventDefault();
+            if (!appState.selectedImage || appState.isSaving) return;
 
             const saveBtn = document.getElementById('save-btn');
-            const alertBox = document.getElementById('status-alert');
-            
+            const referenceInput = document.getElementById('edit-reference');
+            const verseInput = document.getElementById('edit-verse');
+
             appState.isSaving = true;
-            saveBtn.innerText = 'Processing Updates on AWS...';
+            saveBtn.innerText = 'Saving...';
             saveBtn.disabled = true;
 
+            const imgId = appState.selectedImage.image_id || appState.selectedImage.id;
+
             const payload = {
-                image_id: appState.selectedImage.image_id,
-                s3_key: appState.selectedImage.s3_key,
-                verse_text: document.getElementById('form-verse').value,
-                reference: document.getElementById('form-reference').value,
-                requested_filename: document.getElementById('form-filename').value
+                image_id: imgId,
+                reference: referenceInput.value.trim(),
+                verse_text: verseInput.value.trim()
             };
 
             try {
                 const response = await fetch(`${API_BASE_URL}/images/update`, {
-                    method: 'PUT',
+                    method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify(payload)
                 });
-                const result = await response.json();
 
-                if (result.success) {
-                    alertBox.className = "p-3 rounded-lg text-xs font-medium bg-green-50 text-green-700 border border-green-200 block";
-                    alertBox.innerText = "Asset updated perfectly!";
+                if (response.ok) {
+                    // Update in-memory data
+                    appState.selectedImage.reference = payload.reference;
+                    appState.selectedImage.verse_text = payload.verse_text;
                     
-                    const updatedData = { ...result.data, views: appState.selectedImage.views };
-                    
-                    appState.images = appState.images.map(img => img.image_id === payload.image_id ? updatedData : img);
-                    
-                    // Keep search terms from snapping grid views back after typing edits out
-                    const currentSearchTerm = document.getElementById('adminSearchInput').value;
-                    executeDatabaseSearchFilter(currentSearchTerm);
+                    const idx = appState.images.findIndex(i => (i.image_id || i.id) === imgId);
+                    if (idx !== -1) {
+                        appState.images[idx].reference = payload.reference;
+                        appState.images[idx].verse_text = payload.verse_text;
+                    }
 
-                    appState.selectedImage = updatedData;
-                    calculateLanguageMetrics();
-
-                    document.getElementById('modal-reference-view').innerText = updatedData.reference ? `PATH: ${updatedData.s3_key} (${updatedData.reference})` : `PATH: ${updatedData.s3_key}`;
-                    
+                    executeDatabaseSearchFilter();
+                    saveBtn.innerText = 'Saved!';
                     setTimeout(() => {
-                        if (window.innerWidth < 768) dismissWorkspace();
-                    }, 800);
+                        saveBtn.innerText = 'Save Changes';
+                        saveBtn.disabled = false;
+                        appState.isSaving = false;
+                    }, 1200);
                 } else {
-                    alertBox.className = "p-3 rounded-lg text-xs font-medium bg-red-50 text-red-700 border border-red-200 block";
-                    alertBox.innerText = result.message || "Failed to save edits.";
+                    alert('Failed to update image details.');
+                    saveBtn.innerText = 'Save Changes';
+                    saveBtn.disabled = false;
+                    appState.isSaving = false;
                 }
             } catch (err) {
-                alertBox.className = "p-3 rounded-lg text-xs font-medium bg-red-50 text-red-700 border border-red-200 block";
-                alertBox.innerText = "Network connection failure.";
-            } finally {
-                appState.isSaving = false;
+                alert('Network error while saving changes.');
                 saveBtn.innerText = 'Save Changes';
                 saveBtn.disabled = false;
+                appState.isSaving = false;
             }
-        };
-
-        // Initialize session check on DOM ready
-        document.addEventListener('DOMContentLoaded', checkAuthSession);
+        }
     </script>
 </body>
 </html>
