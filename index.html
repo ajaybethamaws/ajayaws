@@ -105,16 +105,21 @@
                     <input type="file" id="upload-file-input" accept="image/jpeg, image/jpg, image/png, image/webp" class="hidden" onchange="updateFilePreview(this)" required>
                 </div>
 
-                <!-- OPTIONAL BIBLE REFERENCE -->
+                <!-- BIBLE REFERENCE WITH FETCH BUTTON -->
                 <div>
                     <label class="block text-[11px] font-extrabold text-slate-600 uppercase tracking-wider mb-1">Bible Reference <span class="text-slate-400 font-normal lowercase">(optional)</span></label>
-                    <input type="text" id="upload-reference" placeholder="e.g. Psalm 23:1" class="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-sky-500 focus:bg-white transition-all">
+                    <div class="flex gap-2">
+                        <input type="text" id="upload-reference" placeholder="e.g. Psalm 23:1" class="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-sky-500 focus:bg-white transition-all">
+                        <button type="button" onclick="fetchVerseTextFromDB('upload')" class="bg-slate-900 hover:bg-slate-800 text-white font-bold px-4 py-2.5 rounded-xl text-xs shrink-0 cursor-pointer transition-all">
+                            Fetch Text
+                        </button>
+                    </div>
                 </div>
 
-                <!-- OPTIONAL SCRIPTURE VERSE TEXT -->
+                <!-- SCRIPTURE VERSE TEXT -->
                 <div>
                     <label class="block text-[11px] font-extrabold text-slate-600 uppercase tracking-wider mb-1">Scripture Verse Text <span class="text-slate-400 font-normal lowercase">(optional)</span></label>
-                    <textarea id="upload-verse" rows="2" placeholder="Type full scripture text..." class="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-sky-500 focus:bg-white transition-all"></textarea>
+                    <textarea id="upload-verse" rows="2" placeholder="Type full scripture text or fetch from database..." class="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-sky-500 focus:bg-white transition-all"></textarea>
                 </div>
 
                 <!-- SUBMIT BUTTON -->
@@ -207,7 +212,7 @@
             </main>
         </div>
 
-        <!-- RIGHT WORKSPACE SIDEBAR (NOW DOUBLES AS LARGE PREVIEW & EDITOR) -->
+        <!-- RIGHT WORKSPACE SIDEBAR -->
         <aside id="edit-sidebar" class="fixed inset-x-0 bottom-0 transform translate-y-full md:translate-y-0 md:static w-full md:w-[460px] lg:w-[500px] bg-white border-t md:border-t-0 md:border-l border-slate-200 shadow-2xl md:shadow-none p-6 flex flex-col overflow-y-auto max-h-[85vh] md:max-h-full h-auto md:h-full shrink-0 transition-transform duration-300 ease-in-out z-40">
             <div class="w-12 h-1.5 bg-slate-300 rounded-full mx-auto mb-4 md:hidden"></div>
             
@@ -241,7 +246,6 @@
             checkAuthSession();
         });
 
-        // Automatic fallback for the S3 logo format (.png -> .jpg -> .jpeg)
         window.handleLogoError = function(imgEl) {
             if (imgEl.src.endsWith('.png')) {
                 imgEl.src = `https://${CLOUDFRONT_DOMAIN}/logo.jpg`;
@@ -296,13 +300,11 @@
             document.getElementById('upload-form').reset();
             document.getElementById('upload-status-alert').classList.add('hidden');
 
-            // Reset Dropzone visual state
             document.getElementById('dropzone-text').innerText = 'Tap to open Gallery / Camera';
             document.getElementById('dropzone-text').className = 'text-xs font-bold text-slate-700 block';
             document.getElementById('dropzone-subtext').innerText = 'Supports JPEG, PNG, WEBP';
             document.getElementById('dropzone').classList.remove('border-sky-500', 'bg-sky-50/50');
 
-            // Reset Language Pill to default (English)
             const firstPill = document.querySelector('.lang-pill');
             if (firstPill) selectLanguagePill('english', firstPill);
         };
@@ -329,6 +331,32 @@
                 textEl.className = "text-xs font-bold text-sky-600 truncate max-w-[280px] block";
                 subtextEl.innerText = `${(file.size / 1024 / 1024).toFixed(2)} MB • Tap to change`;
                 dropzone.classList.add('border-sky-500', 'bg-sky-50/50');
+            }
+        };
+
+        // NEW: Function to query backend database API for verse text
+        window.fetchVerseTextFromDB = async function(mode = 'upload') {
+            const refInputId = mode === 'upload' ? 'upload-reference' : 'edit-reference';
+            const verseInputId = mode === 'upload' ? 'upload-verse' : 'edit-verse';
+            
+            const referenceVal = document.getElementById(refInputId).value.trim();
+            if (!referenceVal) {
+                alert('Please enter a reference first (e.g., Psalm 23:1)');
+                return;
+            }
+
+            try {
+                const response = await fetch(`${API_BASE_URL}/verses/fetch?reference=${encodeURIComponent(referenceVal)}`);
+                const result = await response.json();
+
+                if (response.ok && result.success) {
+                    document.getElementById(verseInputId).value = result.verse_text;
+                } else {
+                    alert(result.message || 'Verse not found in database.');
+                }
+            } catch (err) {
+                console.error('Error fetching verse:', err);
+                alert('Failed to connect to the database API.');
             }
         };
 
@@ -469,10 +497,6 @@
             }
         }
 
-        /**
-         * Replicates Lambda sorting:
-         * tuple(sort_value, id, s3_key) in DESCENDING order
-         */
         function sortLikeLambda(items, reverse = true) {
             return [...items].sort((a, b) => {
                 const getSortVal = (item) => 
@@ -481,13 +505,11 @@
                 const aVal = String(getSortVal(a));
                 const bVal = String(getSortVal(b));
 
-                // 1. Primary: sort_value
                 if (aVal !== bVal) {
                     const comp = aVal.localeCompare(bVal, undefined, { numeric: true });
                     return reverse ? -comp : comp;
                 }
 
-                // 2. Secondary: image_id / id
                 const aId = String(a.image_id || a.id || '');
                 const bId = String(b.image_id || b.id || '');
                 if (aId !== bId) {
@@ -495,7 +517,6 @@
                     return reverse ? -comp : comp;
                 }
 
-                // 3. Tertiary: s3_key
                 const aKey = String(a.s3_key || '');
                 const bKey = String(b.s3_key || '');
                 const comp = aKey.localeCompare(bKey, undefined, { numeric: true });
@@ -512,7 +533,6 @@
                 clearBtn.classList.toggle('hidden', query.length === 0);
             }
 
-            // 1. Filter
             let results = appState.images.filter(img => {
                 if (!query) return true;
                 const ref = (img.reference || '').toLowerCase();
@@ -522,7 +542,6 @@
                 return ref.includes(query) || verse.includes(query) || id.includes(query) || key.includes(query);
             });
 
-            // 2. Sort according to Lambda Tuple logic
             if (sortMode === 'newest') {
                 results = sortLikeLambda(results, true);
             } else if (sortMode === 'oldest') {
@@ -591,7 +610,6 @@
                                 loading="lazy"
                             >
                             
-                            <!-- VIEWS BADGE -->
                             <div class="absolute top-2 left-2 bg-slate-900/70 backdrop-blur-sm text-white px-2 py-1 rounded-md text-[10px] font-medium flex items-center gap-1 shadow-sm">
                                 <svg class="w-3 h-3 text-slate-200" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
                                     <path stroke-linecap="round" stroke-linejoin="round" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"/>
@@ -669,7 +687,12 @@
 
                         <div>
                             <label class="block text-[10px] font-extrabold text-slate-400 uppercase tracking-wider mb-1">Bible Reference</label>
-                            <input type="text" id="edit-reference" value="${img.reference || ''}" class="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm font-bold text-slate-900 focus:bg-white focus:ring-2 focus:ring-sky-500 focus:outline-none">
+                            <div class="flex gap-2">
+                                <input type="text" id="edit-reference" value="${img.reference || ''}" class="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm font-bold text-slate-900 focus:bg-white focus:ring-2 focus:ring-sky-500 focus:outline-none">
+                                <button type="button" onclick="fetchVerseTextFromDB('edit')" class="bg-slate-900 hover:bg-slate-800 text-white font-bold px-3 py-2 rounded-xl text-xs shrink-0 cursor-pointer transition-all">
+                                    Fetch
+                                </button>
+                            </div>
                         </div>
 
                         <div>
@@ -738,7 +761,6 @@
                 if (response.ok && result.success !== false) {
                     const updatedData = result.data || {};
 
-                    // Update in-memory data
                     appState.selectedImage.reference = payload.reference;
                     appState.selectedImage.verse_text = payload.verse_text;
                     appState.selectedImage.current_filename =
