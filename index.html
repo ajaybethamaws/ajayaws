@@ -348,6 +348,18 @@
             }
         };
 
+        function buildFilenameFromReference(reference, existingFilename = '') {
+            const cleanReference = reference.trim().replace(/[ :]/g, '_');
+            if (!cleanReference) return '';
+
+            const lastDotIndex = existingFilename.lastIndexOf('.');
+            const extension = lastDotIndex > 0
+                ? existingFilename.slice(lastDotIndex)
+                : '';
+
+            return `${cleanReference}${extension}`;
+        }
+
         window.handleImageUpload = async function(e) {
             e.preventDefault();
             if (appState.isUploading) return;
@@ -366,6 +378,8 @@
             const language = document.getElementById('upload-language').value;
             const reference = document.getElementById('upload-reference').value;
             const verseText = document.getElementById('upload-verse').value;
+            const generatedFilename =
+                buildFilenameFromReference(reference, file.name) || file.name;
 
             try {
                 const reader = new FileReader();
@@ -375,7 +389,7 @@
 
                     const payload = {
                         language: language,
-                        filename: file.name,
+                        filename: generatedFilename,
                         file_type: file.type,
                         reference: reference,
                         verse_text: verseText,
@@ -681,6 +695,11 @@
                         </div>
 
                         <div>
+                            <label class="block text-[11px] font-extrabold text-slate-500 uppercase tracking-wider mb-1">Image Filename</label>
+                            <input type="text" id="edit-filename" value="${img.current_filename || (img.s3_key || '').split('/').pop() || ''}" required class="w-full px-3 py-2 bg-white border border-slate-300 rounded-lg text-xs font-mono text-slate-800 focus:ring-2 focus:ring-sky-500 focus:outline-none">
+                        </div>
+
+                        <div>
                             <label class="block text-[11px] font-extrabold text-slate-500 uppercase tracking-wider mb-1">Bible Reference</label>
                             <input type="text" id="edit-reference" value="${img.reference || ''}" class="w-full px-3 py-2 bg-white border border-slate-300 rounded-lg text-xs font-semibold text-slate-800 focus:ring-2 focus:ring-sky-500 focus:outline-none">
                         </div>
@@ -698,6 +717,23 @@
                     </form>
                 </div>
             `;
+
+            const filenameInput = document.getElementById('edit-filename');
+            const referenceInput = document.getElementById('edit-reference');
+
+            const autoPopulateFilename = () => {
+                const generatedFilename = buildFilenameFromReference(
+                    referenceInput.value,
+                    filenameInput.value
+                );
+
+                if (generatedFilename) {
+                    filenameInput.value = generatedFilename;
+                }
+            };
+
+            referenceInput.addEventListener('input', autoPopulateFilename);
+            autoPopulateFilename();
         }
 
         async function handleSaveImage(event) {
@@ -705,6 +741,7 @@
             if (!appState.selectedImage || appState.isSaving) return;
 
             const saveBtn = document.getElementById('save-btn');
+            const filenameInput = document.getElementById('edit-filename');
             const referenceInput = document.getElementById('edit-reference');
             const verseInput = document.getElementById('edit-verse');
 
@@ -716,37 +753,59 @@
 
             const payload = {
                 image_id: imgId,
+                s3_key: appState.selectedImage.s3_key,
+                requested_filename: filenameInput.value.trim(),
                 reference: referenceInput.value.trim(),
                 verse_text: verseInput.value.trim()
             };
 
             try {
                 const response = await fetch(`${API_BASE_URL}/images/update`, {
-                    method: 'POST',
+                    method: 'PUT',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify(payload)
                 });
 
-                if (response.ok) {
+                const result = await response.json().catch(() => ({}));
+
+                if (response.ok && result.success !== false) {
+                    const updatedData = result.data || {};
+
                     // Update in-memory data
                     appState.selectedImage.reference = payload.reference;
                     appState.selectedImage.verse_text = payload.verse_text;
+                    appState.selectedImage.current_filename =
+                        updatedData.current_filename || payload.requested_filename;
+                    appState.selectedImage.s3_key =
+                        updatedData.s3_key || appState.selectedImage.s3_key;
                     
                     const idx = appState.images.findIndex(i => (i.image_id || i.id) === imgId);
                     if (idx !== -1) {
                         appState.images[idx].reference = payload.reference;
                         appState.images[idx].verse_text = payload.verse_text;
+                        appState.images[idx].current_filename =
+                            appState.selectedImage.current_filename;
+                        appState.images[idx].s3_key =
+                            appState.selectedImage.s3_key;
                     }
 
                     executeDatabaseSearchFilter();
-                    saveBtn.innerText = 'Saved!';
+                    renderEditSidebar();
+                    const refreshedSaveBtn = document.getElementById('save-btn');
+                    if (refreshedSaveBtn) {
+                        refreshedSaveBtn.innerText = 'Saved!';
+                        refreshedSaveBtn.disabled = true;
+                    }
                     setTimeout(() => {
-                        saveBtn.innerText = 'Save Changes';
-                        saveBtn.disabled = false;
+                        const currentSaveBtn = document.getElementById('save-btn');
+                        if (currentSaveBtn) {
+                            currentSaveBtn.innerText = 'Save Changes';
+                            currentSaveBtn.disabled = false;
+                        }
                         appState.isSaving = false;
                     }, 1200);
                 } else {
-                    alert('Failed to update image details.');
+                    alert(result.message || 'Failed to update image details.');
                     saveBtn.innerText = 'Save Changes';
                     saveBtn.disabled = false;
                     appState.isSaving = false;
