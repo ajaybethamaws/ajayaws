@@ -188,7 +188,7 @@
                         >&times;</button>
                     </div>
 
-                    <!-- NEW: Filter Without Reference Button -->
+                    <!-- UPDATED: Filter Without Reference Button with Dynamic Count Badge -->
                     <button 
                         type="button" 
                         id="filter-missing-ref-btn" 
@@ -197,6 +197,7 @@
                     >
                         <span id="missing-ref-indicator" class="w-2 h-2 rounded-full bg-slate-300"></span>
                         <span>Needs Reference</span>
+                        <span id="missing-ref-count-badge" class="ml-1 bg-slate-100 text-slate-600 px-2 py-0.5 rounded-md font-mono text-[11px]">0</span>
                     </button>
 
                     <!-- SORT DROPDOWN -->
@@ -351,19 +352,30 @@
             
             const btn = document.getElementById('filter-missing-ref-btn');
             const indicator = document.getElementById('missing-ref-indicator');
+            const badge = document.getElementById('missing-ref-count-badge');
 
             if (appState.showOnlyMissingReference) {
                 btn.className = "shrink-0 bg-amber-500 hover:bg-amber-600 border border-amber-600 text-white font-bold px-4 py-2.5 rounded-xl text-xs shadow-sm transition-all cursor-pointer flex items-center gap-2";
                 indicator.className = "w-2 h-2 rounded-full bg-white animate-pulse";
+                badge.className = "ml-1 bg-amber-600 text-white px-2 py-0.5 rounded-md font-mono text-[11px]";
             } else {
                 btn.className = "shrink-0 bg-white hover:bg-slate-50 border border-slate-200 text-slate-700 font-bold px-4 py-2.5 rounded-xl text-xs shadow-sm transition-all cursor-pointer flex items-center gap-2";
                 indicator.className = "w-2 h-2 rounded-full bg-slate-300";
+                badge.className = "ml-1 bg-slate-100 text-slate-600 px-2 py-0.5 rounded-md font-mono text-[11px]";
             }
 
             executeDatabaseSearchFilter();
         };
 
-        // NEW: Function to query backend database API for verse text
+        // NEW: Function to update the missing reference count badge dynamically
+        function updateMissingReferenceCount() {
+            const missingCount = appState.images.filter(img => !img.reference || img.reference.trim().length === 0).length;
+            const badge = document.getElementById('missing-ref-count-badge');
+            if (badge) {
+                badge.innerText = missingCount;
+            }
+        }
+
         window.fetchVerseTextFromDB = async function(mode = 'upload') {
             const refInputId = mode === 'upload' ? 'upload-reference' : 'edit-reference';
             const verseInputId = mode === 'upload' ? 'upload-verse' : 'edit-verse';
@@ -516,6 +528,7 @@
                 appState.images = data.images || [];
                 
                 calculateLanguageMetrics();
+                updateMissingReferenceCount();
                 executeDatabaseSearchFilter();
             } catch (err) {
                 document.getElementById('image-grid').innerHTML = `
@@ -587,6 +600,7 @@
             }
 
             appState.filteredImages = results;
+            updateMissingReferenceCount();
             renderGrid();
         }
 
