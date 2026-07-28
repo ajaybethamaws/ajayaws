@@ -238,7 +238,12 @@
                     </div>
                 </div>
 
-                <h2 class="text-base font-bold text-slate-800 mb-4 tracking-tight">Your Image Assets</h2>
+                <div class="flex items-center justify-between mb-4">
+                    <h2 class="text-base font-bold text-slate-800 tracking-tight">
+                        Your Image Assets 
+                        <span id="search-count-badge" class="ml-2 px-2.5 py-0.5 bg-slate-200 text-slate-700 text-xs font-mono rounded-full font-bold">0</span>
+                    </h2>
+                </div>
                 
                 <!-- GRID DISPLAY -->
                 <div id="image-grid" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4 pb-24 md:pb-12">
@@ -624,6 +629,13 @@
 
             appState.filteredImages = results;
             updateMissingReferenceCount();
+
+            // Update Search Count Badge
+            const countBadge = document.getElementById('search-count-badge');
+            if (countBadge) {
+                countBadge.innerText = appState.filteredImages.length;
+            }
+
             renderGrid();
         }
 
