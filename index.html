@@ -142,7 +142,7 @@
             </div>
             <div>
                 <h1 class="text-xl font-bold tracking-tight">Verstantly Content Management</h1>
-                <p class="text-xs text-slate-400 mt-0.5">Select any image card below to view large preview and modify S3 metadata.</p>
+                <p class="text-xs text-slate-400 mt-0.5">Select any image card below to edit verse metadata in the right inspector panel.</p>
             </div>
         </div>
         
@@ -166,6 +166,32 @@
         
         <!-- MAIN GALLERY CONTAINER -->
         <div class="flex-1 flex flex-col relative overflow-hidden bg-slate-50 h-full">
+            <!-- PANE-SCOPED IMAGE PREVIEW: covers only the left gallery -->
+            <div id="image-modal" class="hidden absolute inset-0 bg-slate-900/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+                <div class="bg-white rounded-3xl shadow-2xl border border-slate-200 p-4 sm:p-6 max-w-3xl w-full relative flex flex-col max-h-[calc(100%-2rem)]">
+                    <button type="button" onclick="closeImageModal()" class="absolute top-4 right-4 z-10 bg-slate-100 hover:bg-slate-200 text-slate-700 w-8 h-8 rounded-full flex items-center justify-center font-bold text-lg focus:outline-none cursor-pointer transition-all" aria-label="Close image preview">&times;</button>
+                    
+                    <div id="modal-content-area" class="flex flex-col lg:flex-row gap-6 overflow-y-auto h-full p-2">
+                        <!-- Large Image Preview container -->
+                        <div class="flex-1 bg-black rounded-2xl overflow-hidden flex items-center justify-center min-h-[300px] max-h-[calc(100vh-12rem)] relative">
+                            <img id="modal-img-preview" src="" alt="High Resolution Preview" class="max-h-full max-w-full object-contain select-none" onerror="handleImageLoadError(this)">
+                        </div>
+                        <!-- Preview details -->
+                        <div class="w-full lg:w-60 flex flex-col justify-between shrink-0 space-y-4">
+                            <div>
+                                <span id="modal-badge-lang" class="bg-sky-100 text-sky-700 font-bold text-[10px] px-2.5 py-1 rounded-md uppercase tracking-wider">Language</span>
+                                <h3 id="modal-reference" class="text-lg font-bold text-slate-900 mt-2">Reference</h3>
+                                <p id="modal-verse-text" class="text-xs text-slate-600 mt-2 leading-relaxed bg-slate-50 p-3 rounded-xl border border-slate-100">Verse text here...</p>
+                            </div>
+                            <div class="pt-4 border-t border-slate-100 text-xs text-slate-400 font-mono flex items-center justify-between">
+                                <span id="modal-image-id">ID: ...</span>
+                                <span id="modal-views">0 views</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
             <main class="flex-1 p-4 md:p-6 overflow-y-auto h-full min-w-0">
                 
                 <!-- SEARCH & SORT CONTROLS -->
@@ -188,7 +214,7 @@
                         >&times;</button>
                     </div>
 
-                    <!-- UPDATED: Filter Without Reference Button with Dynamic Count Badge -->
+                    <!-- Filter Without Reference Button with Dynamic Count Badge -->
                     <button 
                         type="button" 
                         id="filter-missing-ref-btn" 
@@ -224,17 +250,15 @@
             </main>
         </div>
 
-        <!-- RIGHT WORKSPACE SIDEBAR -->
-        <aside id="edit-sidebar" class="fixed inset-x-0 bottom-0 transform translate-y-full md:translate-y-0 md:static w-full md:w-[460px] lg:w-[500px] bg-white border-t md:border-t-0 md:border-l border-slate-200 shadow-2xl md:shadow-none p-6 flex flex-col overflow-y-auto max-h-[85vh] md:max-h-full h-auto md:h-full shrink-0 transition-transform duration-300 ease-in-out z-40">
-            <div class="w-12 h-1.5 bg-slate-300 rounded-full mx-auto mb-4 md:hidden"></div>
-            
+        <!-- RIGHT WORKSPACE SIDEBAR (PERMANENT RIGHT-HAND SIDE EDITING INSPECTOR - NO PREVIEW IMAGE) -->
+        <aside id="edit-sidebar" class="w-full md:w-[420px] lg:w-[460px] bg-white border-l border-slate-200 shadow-none p-6 flex flex-col overflow-y-auto h-full shrink-0 z-40">
             <div id="edit-workspace" class="h-full flex flex-col justify-between">
-                <div class="h-full flex flex-col items-center justify-center text-center p-6 text-slate-400 my-12 md:my-auto">
+                <div class="h-full flex flex-col items-center justify-center text-center p-6 text-slate-400 my-auto">
                     <svg class="w-12 h-12 text-slate-300 mb-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"></path>
                         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"></path>
                     </svg>
-                    <p class="text-sm font-medium">Click on any image card to inspect the large high-resolution view and edit verse metadata.</p>
+                    <p class="text-sm font-medium">Click on any image card to edit its metadata here in the sidebar inspector.</p>
                 </div>
             </div>
         </aside>
@@ -367,7 +391,6 @@
             executeDatabaseSearchFilter();
         };
 
-        // NEW: Function to update the missing reference count badge dynamically
         function updateMissingReferenceCount() {
             const missingCount = appState.images.filter(img => !img.reference || img.reference.trim().length === 0).length;
             const badge = document.getElementById('missing-ref-count-badge');
@@ -613,11 +636,42 @@
             renderEditSidebar();
         }
 
-        function deselectImage() {
-            appState.selectedImage = null;
-            renderGrid();
-            renderEditSidebar();
-        }
+        window.selectImageAndOpenPreview = function(event, imageId) {
+            selectImage(imageId);
+            openImageModal(event, imageId);
+        };
+
+        window.openImageModal = function(event, imageId) {
+            event.stopPropagation();
+            const found = appState.images.find(img => (img.image_id || img.id) === imageId);
+            if (!found) return;
+
+            const modal = document.getElementById('image-modal');
+            const previewImg = document.getElementById('modal-img-preview');
+            const refEl = document.getElementById('modal-reference');
+            const verseEl = document.getElementById('modal-verse-text');
+            const idEl = document.getElementById('modal-image-id');
+            const viewsEl = document.getElementById('modal-views');
+            const langBadge = document.getElementById('modal-badge-lang');
+
+            previewImg.src = `https://${CLOUDFRONT_DOMAIN}/${found.s3_key}`;
+            refEl.innerText = found.reference || 'Untitled Verse';
+            verseEl.innerText = found.verse_text || 'No text snippet added...';
+            idEl.innerText = `ID: ${found.image_id || found.id || ''}`;
+            viewsEl.innerText = `${found.views ?? 0} views`;
+            
+            const lowerKey = (found.s3_key || '').toLowerCase();
+            let langText = 'ENGLISH';
+            if (lowerKey.startsWith('telugu/')) langText = 'తెలుగు (Telugu)';
+            else if (lowerKey.startsWith('tamil/')) langText = 'தமிழ் (Tamil)';
+            langBadge.innerText = langText;
+
+            modal.classList.remove('hidden');
+        };
+
+        window.closeImageModal = function() {
+            document.getElementById('image-modal').classList.add('hidden');
+        };
 
         function clearActiveSearch() {
             const input = document.getElementById('adminSearchInput');
@@ -646,7 +700,7 @@
                 
                 return `
                     <div 
-                        onclick="selectImage('${imgId}')" 
+                        onclick="selectImageAndOpenPreview(event, '${imgId}')" 
                         class="group bg-white rounded-2xl border ${isSelected ? 'border-sky-500 ring-2 ring-sky-100 shadow-md' : 'border-slate-200 hover:border-slate-300'} overflow-hidden cursor-pointer transition-all duration-200 flex flex-col relative"
                     >
                         <div class="aspect-square bg-slate-100 relative overflow-hidden p-1">
@@ -684,26 +738,22 @@
 
         function renderEditSidebar() {
             const workspace = document.getElementById('edit-workspace');
-            const sidebar = document.getElementById('edit-sidebar');
             const img = appState.selectedImage;
 
             if (!img) {
-                sidebar.classList.add('translate-y-full');
                 workspace.innerHTML = `
-                    <div class="h-full flex flex-col items-center justify-center text-center p-6 text-slate-400 my-12 md:my-auto">
+                    <div class="h-full flex flex-col items-center justify-center text-center p-6 text-slate-400 my-auto">
                         <svg class="w-12 h-12 text-slate-300 mb-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"></path>
                             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"></path>
                         </svg>
-                        <p class="text-sm font-medium">Click on any image card to inspect the large high-resolution view and edit verse metadata.</p>
+                        <p class="text-sm font-medium">Click on any image card to edit its metadata here in the sidebar inspector.</p>
                     </div>
                 `;
                 return;
             }
 
-            sidebar.classList.remove('translate-y-full');
             const imgId = img.image_id || img.id || '';
-            const fullImageUrl = `https://${CLOUDFRONT_DOMAIN}/${img.s3_key}`;
 
             workspace.innerHTML = `
                 <div class="space-y-4 flex flex-col h-full overflow-y-auto pr-1">
@@ -712,22 +762,10 @@
                             <h3 class="text-sm font-bold text-slate-900 uppercase tracking-wider">Asset Inspector</h3>
                             <p class="text-[10px] text-slate-400 font-mono">${imgId}</p>
                         </div>
-                        <button onclick="deselectImage()" class="text-xs text-slate-400 hover:text-slate-600 font-bold cursor-pointer p-1">Close &times;</button>
                     </div>
 
-                    <!-- LARGE HIGH-RESOLUTION IMAGE VIEWER -->
-                    <div class="bg-black/90 rounded-2xl overflow-hidden relative border border-slate-800 shadow-inner flex flex-col items-center justify-center min-h-[260px] max-h-[340px] p-2 shrink-0">
-                        <div class="absolute top-2.5 right-2.5 z-10">
-                            <a href="${fullImageUrl}" target="_blank" class="bg-white/90 hover:bg-white text-slate-900 text-[11px] font-bold px-2.5 py-1.5 rounded-lg shadow flex items-center gap-1 transition-all" title="Open native high-res image">
-                                <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"/></svg>
-                                Full Tab
-                            </a>
-                        </div>
-                        <img src="${fullImageUrl}" class="max-h-[310px] w-full object-contain select-none rounded" onerror="handleImageLoadError(this)" oncontextmenu="return false;">
-                    </div>
-
-                    <!-- METADATA EDIT FORM -->
-                    <form id="edit-form" onsubmit="handleSaveImage(event)" class="space-y-3 text-left pb-4">
+                    <!-- METADATA EDIT FORM (PREVIEW IMAGE REMOVED) -->
+                    <form id="edit-form" onsubmit="handleSaveImage(event)" class="space-y-4 text-left pb-4">
                         <div>
                             <label class="block text-[10px] font-extrabold text-slate-400 uppercase tracking-wider mb-1">Image Filename</label>
                             <input type="text" id="edit-filename" value="${img.current_filename || (img.s3_key || '').split('/').pop() || ''}" required class="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-xs font-mono text-slate-700 focus:bg-white focus:ring-2 focus:ring-sky-500 focus:outline-none">
@@ -745,7 +783,7 @@
 
                         <div>
                             <label class="block text-[10px] font-extrabold text-slate-400 uppercase tracking-wider mb-1">Full Verse Text</label>
-                            <textarea id="edit-verse" rows="4" class="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs sm:text-sm text-slate-800 leading-relaxed focus:bg-white focus:ring-2 focus:ring-sky-500 focus:outline-none">${img.verse_text || ''}</textarea>
+                            <textarea id="edit-verse" rows="6" class="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs sm:text-sm text-slate-800 leading-relaxed focus:bg-white focus:ring-2 focus:ring-sky-500 focus:outline-none">${img.verse_text || ''}</textarea>
                         </div>
 
                         <div class="pt-2">
