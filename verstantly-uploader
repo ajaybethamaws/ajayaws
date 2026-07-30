@@ -1,7 +1,38 @@
 import { S3Client, PutObjectCommand } from "@aws-sdk/client-s3";
+import { SNSClient, PublishCommand } from "@aws-sdk/client-sns"; // Imported SNS client
 
 const s3 = new S3Client({});
+const sns = new SNSClient({}); // Initialized SNS client
 const BUCKET_NAME = "ajaybetham-sta";
+
+// ==========================================
+// DYNAMIC SECURE DAY-BASED AUTH GATEWAY
+// ==========================================
+function checkAuth(event) {
+    const expectedUser = process.env.ADMIN_USERNAME || "admin";
+    
+    // Grab day of week in Eastern Time (using TZ = America/New_York set on the Lambda)
+    const daysOfWeek = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+    const todayIndex = new Date().getDay(); 
+    const todayName = daysOfWeek[todayIndex]; 
+    
+    // Dynamic daily password construct (e.g., "Wednesday@123")
+    const expectedPass = `${todayName}@123`; 
+
+    const headers = event.headers || {};
+    const authHeader = headers['Authorization'] || headers['authorization'];
+
+    if (!authHeader) return false;
+
+    const [type, token] = authHeader.split(' ');
+    if (type.toLowerCase() !== 'basic' || !token) return false;
+
+    // Decode base64 Basic Auth credentials
+    const credentials = Buffer.from(token, 'base64').toString('utf-8');
+    const [username, password] = credentials.split(':');
+
+    return username === expectedUser && password === expectedPass;
+}
 
 export const handler = async (event) => {
     let path = event.rawPath || event.requestContext?.http?.path || event.path || "/";
@@ -10,7 +41,7 @@ export const handler = async (event) => {
     const corsHeaders = {
         "Access-Control-Allow-Origin": "*",
         "Access-Control-Allow-Methods": "GET,POST,OPTIONS",
-        "Access-Control-Allow-Headers": "Content-Type"
+        "Access-Control-Allow-Headers": "Content-Type,Authorization" // Allowed auth headers for preflights
     };
 
     if (httpMethod === "OPTIONS") {
@@ -19,17 +50,23 @@ export const handler = async (event) => {
 
     try {
         // ==========================================
-        // ROUTE 1: DIRECT BINARY UPLOAD TO S3
+        // ROUTE 1: DIRECT BINARY UPLOAD TO S3 (Protected)
         // ==========================================
         if (httpMethod === "POST" && path.includes("/upload")) {
+            // Strictly enforce authentication on API write route
+            if (!checkAuth(event)) {
+                return {
+                    statusCode: 401,
+                    headers: { "Content-Type": "application/json", ...corsHeaders },
+                    body: JSON.stringify({ error: "Access Denied. Dynamic daily credentials required." })
+                };
+            }
+
             const headers = event.headers || {};
-            
-            // Extract metadata passed via custom headers to avoid dealing with complex multipart boundary parsing
             const filename = headers["x-filename"] || "image.jpg";
             const language = headers["x-language"] || "english";
             const contentType = headers["content-type"] || "image/jpeg";
 
-            // Determine safe structural folder routing target
             let folderPrefix = "english/";
             if (language === "telugu") folderPrefix = "telugu/";
             if (language === "tamil") folderPrefix = "tamil/";
@@ -41,17 +78,37 @@ export const handler = async (event) => {
 
             const s3Key = `${folderPrefix}${safeFileName}`;
 
-            // Decode base64 payload passed by API Gateway / Lambda Function URL proxy structure
             const fileBuffer = event.isBase64Encoded 
                 ? Buffer.from(event.body, "base64") 
                 : Buffer.from(event.body);
 
+            // 1. Core Action: Stream payload directly into the target S3 bucket location
             await s3.send(new PutObjectCommand({
                 Bucket: BUCKET_NAME,
                 Key: s3Key,
                 Body: fileBuffer,
                 ContentType: contentType
             }));
+
+            // 2. Notification Action: Fire background email alert via SNS
+            const topicArn = process.env.SNS_TOPIC_ARN;
+            if (topicArn) {
+                try {
+                    await sns.send(new PublishCommand({
+                        TopicArn: topicArn,
+                        Subject: `📸 New Verse Published: ${language.toUpperCase()}`,
+                        Message: `A new asset has been successfully published through the mobile portal.\n\n` +
+                                 `• File Name: ${safeFileName}\n` +
+                                 `• Channel Language: ${language}\n` +
+                                 `• Target Storage Path: s3://${BUCKET_NAME}/${s3Key}\n` +
+                                 `• Ingestion Timestamp: ${new Date().toISOString()}\n\n` +
+                                 `Infrastructure Alert System - Verstantly`
+                    }));
+                } catch (snsErr) {
+                    // Suppress and log downstream alerts errors so the UI flow doesn't hang or fail
+                    console.error("Downstream notification dispatch engine failed:", snsErr);
+                }
+            }
 
             return {
                 statusCode: 200,
@@ -61,7 +118,7 @@ export const handler = async (event) => {
         }
 
         // ==========================================
-        // ROUTE 2: SERVE ONE-CLICK MOBILE UPLOAD UI
+        // ROUTE 2: SERVE ONE-CLICK MOBILE UPLOAD UI (Self-Authenticating UI)
         // ==========================================
         if (httpMethod === "GET") {
             let h = `<!DOCTYPE html>
@@ -78,6 +135,12 @@ export const handler = async (event) => {
                     h2 { margin: 0 0 8px 0; font-size: 22px; font-weight: 700; color: #f8fafc; }
                     p { margin: 0 0 28px 0; font-size: 14px; color: #94a3b8; }
                     
+                    /* Auth Login UI Screen */
+                    #loginScreen { display: block; }
+                    #uploadScreen { display: none; }
+                    .input-field { width: 100%; height: 48px; background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.1); border-radius: 12px; color: white; padding: 0 16px; box-sizing: border-box; margin-bottom: 16px; font-size: 15px; outline: none; transition: border-color 0.2s; }
+                    .input-field:focus { border-color: #38bdf8; }
+
                     label { display: block; text-align: left; font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; color: #38bdf8; margin-bottom: 8px; }
                     
                     .lang-group { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-bottom: 24px; }
@@ -103,7 +166,17 @@ export const handler = async (event) => {
                 </style>
             </head>
             <body>
-                <div class="card">
+                <div class="card" id="loginScreen">
+                    <img src="https://ajaybetham-sta.s3.amazonaws.com/logo.png" class="logo" alt="Logo" onerror="this.style.display='none'">
+                    <h2>Security Required</h2>
+                    <p>Enter credentials to access dynamic secure publisher.</p>
+                    <input type="text" id="usernameInput" placeholder="Username" class="input-field">
+                    <input type="password" id="passwordInput" placeholder="Daily Password" class="input-field" onkeydown="if(event.key === 'Enter') attemptLogin()">
+                    <button onclick="attemptLogin()" class="btn">Authorize</button>
+                    <div id="loginError" class="status error" style="margin-top:15px; display:none;">Invalid credentials.</div>
+                </div>
+
+                <div class="card" id="uploadScreen">
                     <img src="https://ajaybetham-sta.s3.amazonaws.com/logo.png" class="logo" alt="Logo" onerror="this.style.display='none'">
                     <h2>Publish New Verse</h2>
                     <p>Upload your files instantly with a single touch.</p>
@@ -139,6 +212,52 @@ export const handler = async (event) => {
                 </div>
 
                 <script>
+                    let authHeaderValue = "";
+
+                    // On page load, verify if credentials are saved in storage
+                    window.onload = function() {
+                        const savedCreds = sessionStorage.getItem("admin_creds");
+                        if (savedCreds) {
+                            authHeaderValue = savedCreds;
+                            document.getElementById("loginScreen").style.display = "none";
+                            document.getElementById("uploadScreen").style.display = "block";
+                        }
+                    }
+
+                    // Checks the user inputs by submitting a test OPTIONS/CORS check with Auth header attached
+                    async function attemptLogin() {
+                        const user = document.getElementById("usernameInput").value;
+                        const pass = document.getElementById("passwordInput").value;
+                        const errorMsg = document.getElementById("loginError");
+                        
+                        errorMsg.style.display = "none";
+                        const token = btoa(user + ":" + pass);
+                        const testAuthHeader = "Basic " + token;
+
+                        try {
+                            const uploadEndpoint = window.location.pathname.replace(/\\/$/, '') + "/upload";
+                            const res = await fetch(uploadEndpoint, {
+                                method: "POST",
+                                headers: {
+                                    "Authorization": testAuthHeader,
+                                    "x-filename": "test.jpg" // Dry run placeholder
+                                },
+                                body: ""
+                            });
+
+                            if (res.status === 401) {
+                                errorMsg.style.display = "block";
+                            } else {
+                                authHeaderValue = testAuthHeader;
+                                sessionStorage.setItem("admin_creds", testAuthHeader);
+                                document.getElementById("loginScreen").style.display = "none";
+                                document.getElementById("uploadScreen").style.display = "block";
+                            }
+                        } catch (err) {
+                            errorMsg.style.display = "block";
+                        }
+                    }
+
                     const zone = document.getElementById('dropZone');
                     const input = document.getElementById('fileInput');
                     const msg = document.getElementById('fileMsg');
@@ -179,13 +298,13 @@ export const handler = async (event) => {
                         try {
                             const uploadEndpoint = window.location.pathname.replace(/\\/$/, '') + "/upload";
                             
-                            // Send file stream in one single POST action using custom parameters tucked inside HTTP headers
                             const response = await fetch(uploadEndpoint, {
                                 method: "POST",
                                 headers: {
                                     "Content-Type": file.type || "image/jpeg",
                                     "x-filename": file.name,
-                                    "x-language": lang
+                                    "x-language": lang,
+                                    "Authorization": authHeaderValue // Inject auth header here
                                 },
                                 body: file
                             });
