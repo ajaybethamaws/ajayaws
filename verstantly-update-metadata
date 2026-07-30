@@ -1,20 +1,26 @@
 import { S3Client, CopyObjectCommand, DeleteObjectCommand } from "@aws-sdk/client-s3";
 import { DynamoDBClient } from "@aws-sdk/client-dynamodb";
 import { DynamoDBDocumentClient, UpdateCommand, GetCommand } from "@aws-sdk/lib-dynamodb";
+import { SNSClient, PublishCommand } from "@aws-sdk/client-sns";
 
-// Initialize AWS Clients (Automatically uses the Lambda's attached IAM execution role)
+// Initialize AWS Clients
 const s3Client = new S3Client({});
 const ddbClient = new DynamoDBClient({});
 const docClient = DynamoDBDocumentClient.from(ddbClient);
+const snsClient = new SNSClient({});
 
 // Environment variables configuration
-const BUCKET_NAME = process.env.BUCKET_NAME; // Your existing S3 bucket name
+const BUCKET_NAME = process.env.BUCKET_NAME; 
 const TABLE_NAME = process.env.TABLE_NAME || "verstantly-verse-images";
+const TOPIC_ARN = process.env.SNS_TOPIC_ARN;
 
 export const handler = async (event) => {
+    // Determine incoming HTTP Method safely across API Gateway payload v1 & v2 formats
+    const httpMethod = event.httpMethod || event.requestContext?.http?.method;
+
     // 1. Handle API Gateway CORS preflight requests (OPTIONS method)
-    if (event.requestContext && event.requestContext.http && event.requestContext.http.method === "OPTIONS") {
-        return buildResponse(200, {});
+    if (httpMethod === "OPTIONS") {
+        return buildResponse(200, {}, event);
     }
 
     try {
@@ -27,49 +33,48 @@ export const handler = async (event) => {
             return buildResponse(400, { 
                 success: false, 
                 message: "Missing required fields: image_id, verse_text, reference, and requested_filename are all required." 
-            });
+            }, event);
         }
 
         if (!BUCKET_NAME) {
             console.error("Configuration Error: BUCKET_NAME environment variable is not defined.");
-            return buildResponse(500, { success: false, message: "Server configuration missing bucket context." });
+            return buildResponse(500, { success: false, message: "Server configuration missing bucket context." }, event);
         }
 
-        // 3. Clean up the incoming filename to make it safe for web URLs and S3 keys
+        // 3. Clean up the incoming filename
         const sanitizedFilename = requested_filename
             .toLowerCase()
             .trim()
             .replace(/\s+/g, "-")           // Turn spaces into single hyphens
-            .replace(/[^a-z0-9.\-_]/g, ""); // Strip out characters that aren't letters, numbers, dots, hyphens, or underscores
+            .replace(/[^a-z0-9.\-_]/g, ""); // Strip out invalid characters
 
         const newS3Key = `images/${sanitizedFilename}`;
 
-        // 4. Retrieve the existing state from the 'verstantly-verse-images' table
+        // 4. Retrieve existing state from DynamoDB
         const currentItem = await docClient.send(new GetCommand({
             TableName: TABLE_NAME,
             Key: { image_id }
         }));
 
         if (!currentItem.Item) {
-            return buildResponse(404, { success: false, message: `No image record found matching ID: ${image_id}` });
+            return buildResponse(404, { success: false, message: `No image record found matching ID: ${image_id}` }, event);
         }
 
         const oldS3Key = currentItem.Item.s3_key;
         let finalS3Key = oldS3Key;
         let finalFilename = currentItem.Item.current_filename;
 
-        // 5. Execute S3 object renaming if the clean filename differs from what's stored
+        // Track changes explicitly for S3 rename
+        let s3Renamed = false;
         if (oldS3Key !== newS3Key) {
             console.log(`Executing S3 object transition from [${oldS3Key}] to [${newS3Key}]`);
 
-            // Duplicate the item under its new key name
             await s3Client.send(new CopyObjectCommand({
                 Bucket: BUCKET_NAME,
-                CopySource: encodeURIComponent(`${BUCKET_NAME}/${oldS3Key}`), // URL encode the source parameter per S3 requirements
+                CopySource: encodeURIComponent(`${BUCKET_NAME}/${oldS3Key}`),
                 Key: newS3Key
             }));
 
-            // Safely delete the original version
             await s3Client.send(new DeleteObjectCommand({
                 Bucket: BUCKET_NAME,
                 Key: oldS3Key
@@ -77,9 +82,10 @@ export const handler = async (event) => {
 
             finalS3Key = newS3Key;
             finalFilename = sanitizedFilename;
+            s3Renamed = true;
         }
 
-        // 6. Write the fresh metadata into your DynamoDB item attributes
+        // 5. Update DynamoDB Item
         const timestamp = new Date().toISOString();
         const updateResult = await docClient.send(new UpdateCommand({
             TableName: TABLE_NAME,
@@ -95,12 +101,36 @@ export const handler = async (event) => {
             ReturnValues: "ALL_NEW"
         }));
 
-        // Return the clean data structure back to the user interface
+        // 6. SNS Notification
+        if (TOPIC_ARN) {
+            try {
+                await snsClient.send(new PublishCommand({
+                    TopicArn: TOPIC_ARN,
+                    Subject: `⚠️ Verse Metadata Modified: ID ${image_id}`,
+                    Message: `An asset's metadata or storage details have been updated via the management console.\n\n` +
+                             `• Image ID: ${image_id}\n` +
+                             `• Reference: ${reference}\n` +
+                             `• Verse Text: "${verse_text}"\n` +
+                             `• S3 Storage Key: ${finalS3Key}\n` +
+                             `• File Renamed: ${s3Renamed ? `Yes (Old path: ${oldS3Key})` : "No"}\n` +
+                             `• Modification Timestamp: ${timestamp}\n\n` +
+                             `Infrastructure Alert System - Verstantly`
+                }));
+            } catch (snsErr) {
+                return buildResponse(500, {
+                    success: false,
+                    message: "Database updated, but SNS failed.",
+                    error: snsErr.message,
+                    code: snsErr.code || snsErr.__type
+                }, event);
+            }
+        }
+
         return buildResponse(200, {
             success: true,
             message: "Metadata and filename successfully processed.",
             data: updateResult.Attributes
-        });
+        }, event);
 
     } catch (error) {
         console.error("Execution Exception Caught:", error);
@@ -108,21 +138,24 @@ export const handler = async (event) => {
             success: false, 
             message: "An internal server error occurred while updating the asset details.", 
             error: error.message 
-        });
+        }, event);
     }
 };
 
 /**
  * Builds standard API Gateway HTTP Proxy responses with correct CORS configurations
  */
-function buildResponse(statusCode, body) {
+function buildResponse(statusCode, body, event) {
+    // Extract request origin if present, or fallback to the specific admin domain
+    const reqOrigin = event?.headers?.origin || event?.headers?.Origin || "https://admin.verstantly.com";
+
     return {
         statusCode,
         headers: {
             "Content-Type": "application/json",
-            "Access-Control-Allow-Origin": "*", // Keep as '*' for development; switch to your exact UI URL for production
-            "Access-Control-Allow-Headers": "Content-Type,Authorization,X-Amz-Date,X-Api-Key,X-Amz-Security-Token",
-            "Access-Control-Allow-Methods": "PUT,OPTIONS"
+            "Access-Control-Allow-Origin": reqOrigin,
+            "Access-Control-Allow-Headers": "Content-Type,Authorization,X-Amz-Date,X-Api-Key,X-Amz-Security-Token,X-Requested-With,Accept",
+            "Access-Control-Allow-Methods": "PUT,POST,GET,DELETE,OPTIONS"
         },
         body: JSON.stringify(body)
     };
