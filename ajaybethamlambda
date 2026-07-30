@@ -2,6 +2,7 @@ import json
 import boto3
 import logging
 import time
+import base64
 from botocore.config import Config
 
 # --- GLOBAL INITIALIZATION ---
@@ -127,6 +128,58 @@ def lambda_handler(event, context):
         path = event.get('rawPath', event.get('path', '/'))
         clean_path = path.strip('/').lower()
         
+        # --- BACKGROUND ANALYTICS VIEW METRIC ROUTER ---
+        # Intercepts POST requests explicitly routed to target tracking endpoints
+        if clean_path == "increment-view":
+            try:
+                # SAFELY EXTRACT BODY (Handles raw text, proxy objects, and Function URL Base64 strings)
+                raw_body = event.get('body', '{}') or '{}'
+                if event.get('isBase64Encoded', False):
+                    raw_body = base64.b64decode(raw_body).decode('utf-8')
+                
+                body = json.loads(raw_body)
+                image_id = body.get('image_id')
+                
+                if image_id:
+                    # NORMALIZATION: Force string target to lowercase to strictly match database key properties
+                    normalized_id = image_id.strip().lower()
+                    logger.info(f"Incrementing metrics view count for sanitized asset ID: {normalized_id}")
+                    
+                    # FIXED: Using ExpressionAttributeNames ('#v') to escape the 'views' reserved keyword conflict
+                    dynamo_client.update_item(
+                        TableName=TABLE_NAME,
+                        Key={'image_id': {'S': normalized_id}},
+                        UpdateExpression="SET #v = if_not_exists(#v, :zero) + :inc",
+                        ExpressionAttributeNames={
+                            '#v': 'views'
+                        },
+                        ExpressionAttributeValues={
+                            ':zero': {'N': '0'},
+                            ':inc': {'N': '1'}
+                        }
+                    )
+                return {
+                    'statusCode': 200, 
+                    'headers': {
+                        'Content-Type': 'application/json',
+                        'Access-Control-Allow-Origin': '*',
+                        'Access-Control-Allow-Methods': 'POST,OPTIONS',
+                        'Access-Control-Allow-Headers': 'Content-Type'
+                    }, 
+                    'body': json.dumps({'success': True})
+                }
+            except Exception as metric_err:
+                logger.error(f"Failed to record background view metric safely: {str(metric_err)}")
+                # Return a structured 200 catch so tracking glitches never freeze the user's lightbox
+                return {
+                    'statusCode': 200,
+                    'headers': {
+                        'Content-Type': 'application/json',
+                        'Access-Control-Allow-Origin': '*'
+                    },
+                    'body': json.dumps({'success': False, 'error': str(metric_err)})
+                }
+
         # --- LANGUAGE ROUTER MATRIX ---
         if clean_path == "telugu":
             lang_mode = "telugu"
@@ -263,7 +316,7 @@ def lambda_handler(event, context):
         h += '.modal input { background: rgba(255,255,255,0.1); border: 1px solid rgba(255,255,255,0.2); color: white; padding: 12px; border-radius: 10px; width: 100%; box-sizing: border-box; margin-bottom: 12px; outline: none; font-size: 16px; }'
         h += '.modal button { background: #38bdf8; color: #0f172a; border: none; padding: 12px; width: 100%; border-radius: 10px; font-weight: bold; cursor: pointer; font-size: 16px; }'
         
-        # OPTION 1: SEGMENTED PILL SELECTOR STYLING WITH ALIGNED FONT RENDERING STACKS
+        # SEGMENTED PILL SELECTOR STYLING WITH ALIGNED FONT RENDERING STACKS
         h += '.lang-pill-selector { position: fixed; top: 20px; right: 20px; display: flex; background: rgba(30, 41, 59, 0.7); border: 1px solid rgba(255, 255, 255, 0.08); border-radius: 20px; padding: 3px; backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px); z-index: 100; }'
         h += '.lang-segment { display: inline-flex; align-items: center; justify-content: center; padding: 6px 14px; border-radius: 16px; font-size: 12px; font-weight: 700; color: #94a3b8; text-decoration: none; transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1); letter-spacing: 0.05em; }'
         h += '.lang-segment:hover { color: #e2e8f0; }'
@@ -274,7 +327,7 @@ def lambda_handler(event, context):
         h += '@media (max-width: 768px) { .header-container { padding: 50px 16px 24px 16px; } .profile-logo-wrapper { width: 80px; height: 80px; margin-bottom: 16px; } .profile-logo img { width: 50px; height: 50px; } .banner-text { font-size: 16px; } .gallery-grid { gap: 4px; padding: 0 4px; } .grid-item { border-radius: 4px; } .divider { margin-bottom: 16px; } .lightbox-content { max-width: 95vw; } .lightbox-actions { gap: 16px; padding: 6px 16px; } .watermark-overlay { bottom: 12px; width: 32px; height: 32px; } .lang-pill-selector { top: 16px; right: 16px; } .lang-segment { padding: 5px 10px; font-size: 11px; } .lang-te, .lang-ta { font-size: 11px; } }'
         h += '</style></head><body>'
         
-        # --- FIXED INJECT: LANGUAGE PILLS STRIPPED OF GLOBAL QUERY PARAMETERS ---
+        # LANGUAGE PILLS STRIPPED OF GLOBAL QUERY PARAMETERS
         h += '<div class="lang-pill-selector">'
         h += f'  <a href="/" class="lang-segment {"active" if lang_mode == "english" else ""}">EN</a>'
         h += f'  <a href="/telugu" class="lang-segment lang-te {"active" if lang_mode == "telugu" else ""}">తెలుగు</a>'
@@ -350,6 +403,7 @@ def lambda_handler(event, context):
         h += 'function closeM(){ m.style.display="none"; }'
         h += 'async function sub(){ const e=document.getElementById("uE"),b=document.getElementById("sBtn"); if(!e.value.includes("@"))return alert("Valid email please!"); b.disabled=true; b.innerText="..."; try{ await fetch("' + SUBSCRIBER_URL + '",{method:"POST",mode:"no-cors",body:JSON.stringify({email:e.value.trim()})}); alert("Subscribed! Be Refreshed."); e.value=""; closeM(); }catch(err){ alert("Subscribed!"); closeM(); } b.disabled=false; b.innerText="Be Refreshed"; }'
         
+        # BACKGROUND FETCH TO TRACK ALBUM VIEWS
         h += 'function openLightbox(index) {'
         h += '  activeIdx = index;'
         h += '  lbImg.src = metadataVault[index].url;'
@@ -358,6 +412,7 @@ def lambda_handler(event, context):
         h += '  const targetId = metadataVault[index].id;'
         h += '  const cleanUrl = window.location.protocol + "//" + window.location.host + window.location.pathname + "?id=" + targetId;'
         h += '  window.history.replaceState({path:cleanUrl}, "", cleanUrl);'
+        h += '  fetch("/increment-view", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ image_id: targetId }) }).catch(() => {});'
         h += '}'
         
         h += 'function closeLightbox() {'
@@ -423,7 +478,7 @@ def lambda_handler(event, context):
         
         # DEEP-LINK INITIALIZATION RESOLVER (Locates index pointer matching URL image_id string token)
         h += f'const initialUrlId = "{url_id if url_id else ""}";'
-        h += 'window.onload = () => {';
+        h += 'window.onload = () => {'
         h += '  if (initialUrlId) {'
         h += '    const matchedIndex = metadataVault.findIndex(item => item.id.toLowerCase() === initialUrlId.toLowerCase());'
         h += '    if (matchedIndex !== -1) { openLightbox(matchedIndex); }'
