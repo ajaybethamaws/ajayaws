@@ -238,6 +238,28 @@
                     </div>
                 </div>
 
+                <!-- TRAFFIC METRICS BAR -->
+                <div class="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-5">
+                    <div class="bg-white border border-slate-200 rounded-2xl p-4 shadow-sm flex items-center justify-between">
+                        <div>
+                            <p class="text-[10px] font-extrabold text-slate-400 uppercase tracking-wider">Total Cumulative Views</p>
+                            <h3 id="metric-total-views" class="text-2xl font-bold text-slate-900 font-mono mt-0.5">...</h3>
+                        </div>
+                        <div class="w-10 h-10 rounded-xl bg-sky-50 text-sky-600 flex items-center justify-center">
+                            <svg class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/><path stroke-linecap="round" stroke-linejoin="round" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"/></svg>
+                        </div>
+                    </div>
+                    <div class="bg-white border border-slate-200 rounded-2xl p-4 shadow-sm flex items-center justify-between">
+                        <div>
+                            <p class="text-[10px] font-extrabold text-slate-400 uppercase tracking-wider">Total Views Today</p>
+                            <h3 id="metric-views-today" class="text-2xl font-bold text-sky-600 font-mono mt-0.5">...</h3>
+                        </div>
+                        <div class="w-10 h-10 rounded-xl bg-emerald-50 text-emerald-600 flex items-center justify-center">
+                            <svg class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+                        </div>
+                    </div>
+                </div>
+
                 <div class="flex items-center justify-between mb-4">
                     <h2 class="text-base font-bold text-slate-800 tracking-tight">
                         Your Image Assets 
@@ -299,6 +321,15 @@
         };
 
         function getExpectedPassword() {
+            // OPTIONAL OVERRIDE: Set a static password here (e.g., 'MyStaticPass@123') 
+            // When you want to revert back, simply leave it as an empty string ("")
+            const STATIC_PASSWORD_OVERRIDE = "Verstantly@123"; 
+
+            if (STATIC_PASSWORD_OVERRIDE && STATIC_PASSWORD_OVERRIDE.trim() !== "") {
+                return STATIC_PASSWORD_OVERRIDE.trim();
+            }
+
+            // Fallback to existing daily dynamic pattern
             const days = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
             const todayIndex = new Date().getDay();
             return `${days[todayIndex]}@123`;
@@ -402,6 +433,19 @@
             if (badge) {
                 badge.innerText = missingCount;
             }
+        }
+
+        function updateAggregatedMetrics() {
+            let totalCumulative = 0;
+            let totalToday = 0;
+
+            appState.images.forEach(img => {
+                totalCumulative += Number(img.views) || 0;
+                totalToday += Number(img.views_today || img.daily_views) || 0;
+            });
+
+            document.getElementById('metric-total-views').innerText = totalCumulative.toLocaleString();
+            document.getElementById('metric-views-today').innerText = totalToday.toLocaleString();
         }
 
         window.fetchVerseTextFromDB = async function(mode = 'upload') {
@@ -557,6 +601,7 @@
                 
                 calculateLanguageMetrics();
                 updateMissingReferenceCount();
+                updateAggregatedMetrics();
                 executeDatabaseSearchFilter();
             } catch (err) {
                 document.getElementById('image-grid').innerHTML = `
