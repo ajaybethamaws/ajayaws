@@ -30,10 +30,10 @@ image_cache = {
 }
 CACHE_TTL_SECONDS = 300  # 5-minute global cache window
 
-def get_cached_db_assets(folder_prefix):
+def get_cached_db_assets(folder_prefix, search_query=''):
     """
     Pulls normalized library documents directly from DynamoDB instead of scanning raw S3 storage keys.
-    Separates assets into Language groups based on the folder path segment prefix mapping.
+    Separates assets into Language groups based on the folder path segment prefix mapping and filters by search query if provided.
     """
     global image_cache
     current_time = time.time()
@@ -62,7 +62,6 @@ def get_cached_db_assets(folder_prefix):
                 if s3_key.lower().startswith(folder_prefix.lower()):
                     
                     # --- HYBRID TIMESTAMP RESOLVER ---
-                    # Checks dynamically for Number (N) or String (S) data types across common fields
                     raw_ts = (
                         item.get('created_at', {}).get('S') or 
                         item.get('created_at', {}).get('N') or 
@@ -74,7 +73,7 @@ def get_cached_db_assets(folder_prefix):
                     
                     filtered_group.append({
                         'id': item.get('image_id', {}).get('S', ''),
-                        's3_key': s3_key, # Preserve original casing for S3 direct targeting
+                        's3_key': s3_key,
                         'reference': item.get('reference', {}).get('S', ''),
                         'verse_text': item.get('verse_text', {}).get('S', ''),
                         'sort_value': raw_ts
@@ -86,7 +85,20 @@ def get_cached_db_assets(folder_prefix):
         except Exception as e:
             logger.error(f"Error executing synchronous cache compilation: {str(e)}")
             
-    return image_cache[cache_key]['items']
+    # Apply search filter if search_query is present
+    base_items = image_cache[cache_key]['items']
+    if search_query:
+        query_lower = search_query.lower().strip()
+        searched_items = []
+        for img in base_items:
+            if (query_lower in str(img.get('reference', '')).lower()) or \
+               (query_lower in str(img.get('verse_text', '')).lower()) or \
+               (query_lower in str(img.get('id', '')).lower()) or \
+               (query_lower in str(img.get('s3_key', '')).lower()):
+                searched_items.append(img)
+        return searched_items
+
+    return base_items
 
 def get_single_db_asset(image_id, folder_prefix):
     """
@@ -102,7 +114,6 @@ def get_single_db_asset(image_id, folder_prefix):
         if item:
             s3_key = item.get('s3_key', {}).get('S', '')
             
-            # Case-insensitive prefix evaluation handles upper/lowercase paths safely
             if not s3_key.lower().startswith(folder_prefix.lower()):
                 logger.warning(f"Asset {image_id} found but belongs to path {s3_key}, which doesn't match expected prefix {folder_prefix}")
                 return None
@@ -129,10 +140,8 @@ def lambda_handler(event, context):
         clean_path = path.strip('/').lower()
         
         # --- BACKGROUND ANALYTICS VIEW METRIC ROUTER ---
-        # Intercepts POST requests explicitly routed to target tracking endpoints
         if clean_path == "increment-view":
             try:
-                # SAFELY EXTRACT BODY (Handles raw text, proxy objects, and Function URL Base64 strings)
                 raw_body = event.get('body', '{}') or '{}'
                 if event.get('isBase64Encoded', False):
                     raw_body = base64.b64decode(raw_body).decode('utf-8')
@@ -141,11 +150,9 @@ def lambda_handler(event, context):
                 image_id = body.get('image_id')
                 
                 if image_id:
-                    # NORMALIZATION: Force string target to lowercase to strictly match database key properties
                     normalized_id = image_id.strip().lower()
                     logger.info(f"Incrementing metrics view count for sanitized asset ID: {normalized_id}")
                     
-                    # FIXED: Using ExpressionAttributeNames ('#v') to escape the 'views' reserved keyword conflict
                     dynamo_client.update_item(
                         TableName=TABLE_NAME,
                         Key={'image_id': {'S': normalized_id}},
@@ -170,7 +177,6 @@ def lambda_handler(event, context):
                 }
             except Exception as metric_err:
                 logger.error(f"Failed to record background view metric safely: {str(metric_err)}")
-                # Return a structured 200 catch so tracking glitches never freeze the user's lightbox
                 return {
                     'statusCode': 200,
                     'headers': {
@@ -201,12 +207,18 @@ def lambda_handler(event, context):
             return {'statusCode': 302, 'headers': {'Location': f"{S3_DIRECT_URL}/{clean_path}"}, 'body': ''}
 
         query_params = event.get('queryStringParameters', {}) or {}
+        if query_params is None:
+            query_params = {}
+
         if query_params.get('refresh') == 'true':
             image_cache = {
                 'english': {'items': [], 'last_updated': 0},
                 'telugu': {'items': [], 'last_updated': 0},
                 'tamil': {'items': [], 'last_updated': 0}
             }
+
+        # --- EXTRACT SEARCH QUERY PARAMETER (?q=) ---
+        search_query = query_params.get('q', '').strip()
 
         # Look up by explicit unique string id instead of mathematical array indexes
         url_id = query_params.get('id')
@@ -223,27 +235,23 @@ def lambda_handler(event, context):
             else:
                 social_img_path = f"{S3_DIRECT_URL}/home-preview.jpg?wspreview=1"
                 
-            images = get_cached_db_assets(folder_prefix)
+            images = get_cached_db_assets(folder_prefix, search_query)
         else:
-            images = get_cached_db_assets(folder_prefix)
-            # Enforce strict validation via prefix check
+            images = get_cached_db_assets(folder_prefix, search_query)
             target_asset = get_single_db_asset(url_id, folder_prefix)
             if target_asset:
                 social_img_path = f"{CLOUDFRONT_BASE}/{target_asset['s3_key']}?wspreview=1"
                 
-                # Dynamic mapping: use reference for title, fallback to default branding if blank
                 if target_asset.get('reference') and target_asset['reference'].strip():
                     display_title = target_asset['reference']
                 else:
                     display_title = "Verse.Instantly.Constantly"
                 
-                # Dynamic mapping: use verse_text for description, fallback to default generic description if blank
                 if target_asset.get('verse_text') and target_asset['verse_text'].strip():
                     display_desc = target_asset['verse_text']
                 else:
                     display_desc = "Daily scriptural meditation and verses delivered instantly."
             else:
-                # Fallback parameters if target ID is invalid or missing entirely from DB
                 display_title = "Verse.Instantly.Constantly"
                 display_desc = "Daily scriptural meditation and verses delivered instantly. Stay spiritually refreshed and connected to the Word, constantly."
                 if lang_mode == "telugu":
@@ -256,7 +264,7 @@ def lambda_handler(event, context):
         # HTML Framework Buildout
         h = f'<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">'
         
-        # OPEN GRAPH TAGS (Perfect static links for messaging platforms)
+        # OPEN GRAPH TAGS
         path_suffix = f"{clean_path}" if clean_path in ["telugu", "tamil"] else ""
         h += f'<meta property="og:title" content="{display_title}">'
         h += f'<meta property="og:image" content="{social_img_path}">'
@@ -273,10 +281,16 @@ def lambda_handler(event, context):
         # CSS STYLING
         h += '<style>'
         h += 'body { display: flex; flex-direction: column; align-items: center; min-height: 100vh; margin: 0; background: #0f172a; font-family: "Inter", sans-serif; color: white; padding-bottom: 60px; box-sizing: border-box; -webkit-user-select: none; user-select: none; }'
-        h += '.header-container { display: flex; flex-direction: column; align-items: center; width: 100%; max-width: 935px; padding: 60px 20px 40px 20px; box-sizing: border-box; text-align: center; }'
+        h += '.header-container { display: flex; flex-direction: column; align-items: center; width: 100%; max-width: 935px; padding: 60px 20px 30px 20px; box-sizing: border-box; text-align: center; }'
         h += '.profile-logo-wrapper { width: 100px; height: 100px; border-radius: 50%; padding: 4px; background: linear-gradient(135deg, #38bdf8, #1e40af); box-shadow: 0 8px 24px rgba(0,0,0,0.3); margin-bottom: 24px; display: flex; align-items: center; justify-content: center; }'
         h += '.profile-logo { width: 100%; height: 100%; background: #0f172a; border-radius: 50%; display: flex; align-items: center; justify-content: center; overflow: hidden; }'
         h += '.profile-logo img { width: 65px; height: 65px; object-fit: contain; }'
+        
+        # Search Bar Styling
+        h += '.search-bar-wrapper { width: 100%; max-width: 420px; margin-top: 20px; margin-bottom: 10px; display: flex; position: relative; }'
+        h += '.search-input { width: 100%; padding: 12px 18px 12px 42px; border-radius: 24px; border: 1px solid rgba(255,255,255,0.15); background: rgba(255,255,255,0.06); color: white; outline: none; font-size: 14px; transition: all 0.3s ease; backdrop-filter: blur(8px); }'
+        h += '.search-input:focus { border-color: #38bdf8; background: rgba(255,255,255,0.1); box-shadow: 0 0 15px rgba(56,189,248,0.2); }'
+        h += '.search-icon { position: absolute; left: 14px; top: 50%; transform: translateY(-50%); color: #94a3b8; pointer-events: none; }'
         
         # Language-Specific Header Styling
         if lang_mode == "telugu":
@@ -316,7 +330,7 @@ def lambda_handler(event, context):
         h += '.modal input { background: rgba(255,255,255,0.1); border: 1px solid rgba(255,255,255,0.2); color: white; padding: 12px; border-radius: 10px; width: 100%; box-sizing: border-box; margin-bottom: 12px; outline: none; font-size: 16px; }'
         h += '.modal button { background: #38bdf8; color: #0f172a; border: none; padding: 12px; width: 100%; border-radius: 10px; font-weight: bold; cursor: pointer; font-size: 16px; }'
         
-        # SEGMENTED PILL SELECTOR STYLING WITH ALIGNED FONT RENDERING STACKS
+        # SEGMENTED PILL SELECTOR
         h += '.lang-pill-selector { position: fixed; top: 20px; right: 20px; display: flex; background: rgba(30, 41, 59, 0.7); border: 1px solid rgba(255, 255, 255, 0.08); border-radius: 20px; padding: 3px; backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px); z-index: 100; }'
         h += '.lang-segment { display: inline-flex; align-items: center; justify-content: center; padding: 6px 14px; border-radius: 16px; font-size: 12px; font-weight: 700; color: #94a3b8; text-decoration: none; transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1); letter-spacing: 0.05em; }'
         h += '.lang-segment:hover { color: #e2e8f0; }'
@@ -327,7 +341,7 @@ def lambda_handler(event, context):
         h += '@media (max-width: 768px) { .header-container { padding: 50px 16px 24px 16px; } .profile-logo-wrapper { width: 80px; height: 80px; margin-bottom: 16px; } .profile-logo img { width: 50px; height: 50px; } .banner-text { font-size: 16px; } .gallery-grid { gap: 4px; padding: 0 4px; } .grid-item { border-radius: 4px; } .divider { margin-bottom: 16px; } .lightbox-content { max-width: 95vw; } .lightbox-actions { gap: 16px; padding: 6px 16px; } .watermark-overlay { bottom: 12px; width: 32px; height: 32px; } .lang-pill-selector { top: 16px; right: 16px; } .lang-segment { padding: 5px 10px; font-size: 11px; } .lang-te, .lang-ta { font-size: 11px; } }'
         h += '</style></head><body>'
         
-        # LANGUAGE PILLS STRIPPED OF GLOBAL QUERY PARAMETERS
+        # LANGUAGE PILLS
         h += '<div class="lang-pill-selector">'
         h += f'  <a href="/" class="lang-segment {"active" if lang_mode == "english" else ""}">EN</a>'
         h += f'  <a href="/telugu" class="lang-segment lang-te {"active" if lang_mode == "telugu" else ""}">తెలుగు</a>'
@@ -353,10 +367,16 @@ def lambda_handler(event, context):
             h += '  <p class="banner-text">"Every word of God is pure; He is a shield to those who put their trust in Him."</p>'
             h += '  <p class="banner-reference">Proverbs 30:5</p>'
             
+        # SEARCH INPUT FIELD COMPONENT
+        h += '  <div class="search-bar-wrapper">'
+        h += '    <span class="search-icon"><svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/></svg></span>'
+        h += f'    <input type="text" id="searchInput" class="search-input" value="{search_query}" placeholder="Search verses or references..." onkeypress="handleSearch(event)">'
+        h += '  </div>'
+        
         h += '</div>'
         h += '<div class="divider"></div>'
         
-        # RENDERING GALLERY TILES USING CLOUDFRONT + DYNAMODB METADATA OBJECT PROPERTIES
+        # RENDERING GALLERY TILES
         h += '<div class="gallery-grid">'
         client_js_array = []
         for idx, img in enumerate(images):
@@ -393,7 +413,7 @@ def lambda_handler(event, context):
         h += '  </div>'
         h += '</div>'
         
-        # FRONTEND ROUTER SCRIPTS
+        # FRONTEND ROUTER SCRIPTS + SEARCH HANDLER
         h += ' <script>const m=document.getElementById("subM"), lb=document.getElementById("lightbox"), lbImg=document.getElementById("lightbox-img"), lbContent=document.getElementById("lbContent");'
         h += f'const metadataVault = {json.dumps(client_js_array)};'
         h += 'let activeIdx = null;'
@@ -403,6 +423,20 @@ def lambda_handler(event, context):
         h += 'function closeM(){ m.style.display="none"; }'
         h += 'async function sub(){ const e=document.getElementById("uE"),b=document.getElementById("sBtn"); if(!e.value.includes("@"))return alert("Valid email please!"); b.disabled=true; b.innerText="..."; try{ await fetch("' + SUBSCRIBER_URL + '",{method:"POST",mode:"no-cors",body:JSON.stringify({email:e.value.trim()})}); alert("Subscribed! Be Refreshed."); e.value=""; closeM(); }catch(err){ alert("Subscribed!"); closeM(); } b.disabled=false; b.innerText="Be Refreshed"; }'
         
+        # SEARCH SUBMISSION HANDLER
+        h += 'function handleSearch(e) {'
+        h += '  if (e.key === "Enter") {'
+        h += '    const query = e.target.value.trim();'
+        h += '    const urlObj = new URL(window.location.href);'
+        h += '    if (query) {'
+        h += '      urlObj.searchParams.set("q", query);'
+        h += '    } else {'
+        h += '      urlObj.searchParams.delete("q");'
+        h += '    }'
+        h += '    window.location.href = urlObj.toString();'
+        h += '  }'
+        h += '}'
+        
         # BACKGROUND FETCH TO TRACK ALBUM VIEWS
         h += 'function openLightbox(index) {'
         h += '  activeIdx = index;'
@@ -410,16 +444,18 @@ def lambda_handler(event, context):
         h += '  lb.classList.add("show");'
         h += '  lbContent.style.transform = "translateY(0)";'
         h += '  const targetId = metadataVault[index].id;'
-        h += '  const cleanUrl = window.location.protocol + "//" + window.location.host + window.location.pathname + "?id=" + targetId;'
-        h += '  window.history.replaceState({path:cleanUrl}, "", cleanUrl);'
+        h += '  const urlObj = new URL(window.location.href);'
+        h += '  urlObj.searchParams.set("id", targetId);'
+        h += '  window.history.replaceState({path:urlObj.toString()}, "", urlObj.toString());'
         h += '  fetch("/increment-view", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ image_id: targetId }) }).catch(() => {});'
         h += '}'
         
         h += 'function closeLightbox() {'
         h += '  lb.classList.remove("show");'
         h += '  activeIdx = null;'
-        h += '  const resetUrl = window.location.protocol + "//" + window.location.host + window.location.pathname;'
-        h += '  window.history.replaceState({path:resetUrl}, "", resetUrl);'
+        h += '  const urlObj = new URL(window.location.href);'
+        h += '  urlObj.searchParams.delete("id");'
+        h += '  window.history.replaceState({path:urlObj.toString()}, "", urlObj.toString());'
         h += '}'
         
         h += 'function nextAsset() {'
@@ -436,7 +472,9 @@ def lambda_handler(event, context):
         
         h += 'function shareCurrentAsset(){'
         h += '  if(activeIdx === null) return;'
-        h += '  const shareUrl = window.location.origin + window.location.pathname + "?id=" + metadataVault[activeIdx].id;'
+        h += '  const urlObj = new URL(window.location.href);'
+        h += '  urlObj.searchParams.set("id", metadataVault[activeIdx].id);'
+        h += '  const shareUrl = urlObj.toString();'
         h += '  if(navigator.share){'
         h += '    navigator.share({title: document.title, url: shareUrl});'
         h += '  } else {'
@@ -476,7 +514,7 @@ def lambda_handler(event, context):
         
         h += 'document.addEventListener("contextmenu", e => e.preventDefault());'
         
-        # DEEP-LINK INITIALIZATION RESOLVER (Locates index pointer matching URL image_id string token)
+        # DEEP-LINK INITIALIZATION RESOLVER
         h += f'const initialUrlId = "{url_id if url_id else ""}";'
         h += 'window.onload = () => {'
         h += '  if (initialUrlId) {'
