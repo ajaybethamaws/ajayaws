@@ -223,6 +223,9 @@ def lambda_handler(event, context):
         # Look up by explicit unique string id instead of mathematical array indexes
         url_id = query_params.get('id')
         
+        # Track active target asset for structured data generation
+        target_asset = None
+        
         # --- DYNAMIC SEO & META DEFINITIONS ---
         if not url_id:
             display_title = "Verse.Instantly.Constantly"
@@ -264,6 +267,14 @@ def lambda_handler(event, context):
         # HTML Framework Buildout
         h = f'<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">'
         
+        # --- JSON-LD STRUCTURED DATA SCHEMA INJECTION ---
+        if target_asset:
+            safe_name = target_asset.get('reference', 'Verse').replace('"', '&quot;')
+            safe_caption = target_asset.get('verse_text', 'Daily verse').replace('"', '&quot;')
+            h += f'<script type="application/ld+json">'
+            h += f'{{"@context":"https://schema.org/","@type":"ImageObject","contentUrl":"{CLOUDFRONT_BASE}/{target_asset["s3_key"]}","name":"{safe_name}","caption":"{safe_caption}"}}'
+            h += f'</script>'
+
         # OPEN GRAPH TAGS
         path_suffix = f"{clean_path}" if clean_path in ["telugu", "tamil"] else ""
         h += f'<meta property="og:title" content="{display_title}">'
