@@ -1,0 +1,93 @@
+import json
+import boto3
+from botocore.exceptions import ClientError
+
+dynamodb = boto3.resource('dynamodb')
+TABLE_NAME = 'VerstantlyVerses' # Update to your actual DynamoDB table name
+table = dynamodb.Table(TABLE_NAME)
+
+def lambda_handler(event, context):
+    # Standard CORS headers for your admin dashboard domain
+    headers = {
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Allow-Headers": "Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token",
+        "Access-Control-Allow-Methods": "OPTIONS,GET,POST,PUT",
+        "Content-Type": "application/json"
+    }
+    
+    # Handle API Gateway HTTP OPTIONS preflight requests
+    if event.get('httpMethod') == 'OPTIONS':
+        return {
+            "statusCode": 200,
+            "headers": headers,
+            "body": json.dumps({"message": "CORS preflight successful"})
+        }
+
+    try:
+        # Extract query string parameters safely
+        params = event.get('queryStringParameters') or {}
+        reference = params.get('reference', '').strip()
+        
+        if not reference:
+            return {
+                "statusCode": 400,
+                "headers": headers,
+                "body": json.dumps({
+                    "success": False,
+                    "message": "Missing required 'reference' query parameter."
+                })
+            }
+
+        # Optional: Normalize reference key (e.g., lowercase / remove extra spaces)
+        normalized_ref = reference.title()
+
+        # Query or Get Item from DynamoDB
+        # Assuming table has partition key 'reference' (String)
+        response = table.get_item(
+            Key={
+                'reference': normalized_ref
+            }
+        )
+
+        if 'Item' not in response:
+            return {
+                "statusCode": 404,
+                "headers": headers,
+                "body": json.dumps({
+                    "success": False,
+                    "message": f"Verse '{reference}' not found in database."
+                })
+            }
+
+        verse_item = response['Item']
+
+        return {
+            "statusCode": 200,
+            "headers": headers,
+            "body": json.dumps({
+                "success": True,
+                "reference": verse_item.get('reference'),
+                "verse_text": verse_item.get('verse_text')
+            })
+        }
+
+    except ClientError as e:
+        print(f"DynamoDB Error: {e.response['Error']['Message']}")
+        return {
+            "statusCode": 500,
+            "headers": headers,
+            "body": json.dumps({
+                "success": False,
+                "message": "Internal database error while fetching verse text."
+            })
+        }
+    except Exception as e:
+        print(f"Unexpected Error: {str(e)}")
+        return {
+            "statusCode": 500,
+            "headers": headers,
+            "body": json.dumps({
+                "success": False,
+                "message": "An unexpected error occurred."
+            })
+        }
