@@ -11,7 +11,6 @@
     <!-- ADMIN LOGIN OVERLAY -->
     <div id="login-modal" class="fixed inset-0 bg-slate-900/95 backdrop-blur-md z-[100] flex items-center justify-center p-4">
         <div class="bg-white rounded-2xl shadow-2xl border border-slate-200 p-8 max-w-sm w-full text-center">
-            <!-- S3 Root Dandelion Logo -->
             <div class="w-16 h-16 bg-slate-900 rounded-2xl flex items-center justify-center mx-auto mb-4 p-2 shadow-lg overflow-hidden">
                 <img src="https://d15si3zl564vcw.cloudfront.net/logo.png" 
                      alt="Verstantly Logo" 
@@ -53,10 +52,8 @@
     <!-- UPLOAD IMAGE MODAL -->
     <div id="upload-modal" class="hidden fixed inset-0 bg-slate-900/80 backdrop-blur-sm z-[90] flex items-center justify-center p-4 overflow-y-auto">
         <div class="bg-white rounded-3xl shadow-2xl border border-slate-200 p-6 sm:p-8 max-w-lg w-full relative">
-            <!-- Close Button -->
             <button type="button" onclick="closeUploadModal()" class="absolute top-5 right-5 text-slate-400 hover:text-slate-600 font-bold text-xl focus:outline-none cursor-pointer">&times;</button>
 
-            <!-- Modal Header with S3 Root Logo -->
             <div class="text-center mb-6">
                 <div class="w-14 h-14 bg-slate-900 rounded-2xl flex items-center justify-center mx-auto mb-3 p-2 shadow-md overflow-hidden">
                     <img src="https://d15si3zl564vcw.cloudfront.net/logo.png" 
@@ -71,8 +68,6 @@
             <div id="upload-status-alert" class="hidden p-3 rounded-xl text-xs font-semibold mb-4 text-center"></div>
 
             <form id="upload-form" onsubmit="handleImageUpload(event)" class="space-y-5">
-                
-                <!-- SELECT CHANNEL LANGUAGE (PILLS) - RESTRICTED TO EN, TE, TA -->
                 <div>
                     <label class="block text-[11px] font-extrabold text-sky-600 uppercase tracking-wider mb-2">Select Channel Language</label>
                     <div id="language-pill-group" class="grid grid-cols-3 gap-2">
@@ -86,26 +81,20 @@
                             தமிழ்
                         </button>
                     </div>
-                    <!-- Hidden Input to store selected language value -->
                     <input type="hidden" id="upload-language" value="english">
                 </div>
 
-                <!-- CHOOSE FILE (DASHED DROPZONE) -->
                 <div>
                     <label class="block text-[11px] font-extrabold text-sky-600 uppercase tracking-wider mb-2">Choose File</label>
-                    
                     <div onclick="document.getElementById('upload-file-input').click()" 
                          id="dropzone"
                          class="border-2 border-dashed border-slate-300 hover:border-sky-400 bg-slate-50/50 hover:bg-sky-50/30 rounded-2xl p-6 text-center cursor-pointer transition-all flex flex-col items-center justify-center min-h-[110px]">
-                        
                         <span id="dropzone-text" class="text-xs font-bold text-slate-700 block">Tap to open Gallery / Camera</span>
                         <span id="dropzone-subtext" class="text-[11px] text-slate-400 font-medium block mt-1">Supports JPEG, PNG, WEBP</span>
                     </div>
-
                     <input type="file" id="upload-file-input" accept="image/jpeg, image/jpg, image/png, image/webp" class="hidden" onchange="updateFilePreview(this)" required>
                 </div>
 
-                <!-- BIBLE REFERENCE WITH FETCH BUTTON -->
                 <div>
                     <label class="block text-[11px] font-extrabold text-slate-600 uppercase tracking-wider mb-1">Bible Reference <span class="text-slate-400 font-normal lowercase">(optional)</span></label>
                     <div class="flex gap-2">
@@ -116,13 +105,11 @@
                     </div>
                 </div>
 
-                <!-- SCRIPTURE VERSE TEXT -->
                 <div>
                     <label class="block text-[11px] font-extrabold text-slate-600 uppercase tracking-wider mb-1">Scripture Verse Text <span class="text-slate-400 font-normal lowercase">(optional)</span></label>
                     <textarea id="upload-verse" rows="2" placeholder="Type full scripture text or fetch from database..." class="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-sky-500 focus:bg-white transition-all"></textarea>
                 </div>
 
-                <!-- SUBMIT BUTTON -->
                 <button type="submit" id="upload-btn" class="w-full bg-sky-500 hover:bg-sky-600 active:bg-sky-700 text-white font-bold py-3 px-4 rounded-xl text-sm transition-all shadow-md cursor-pointer mt-2">
                     Upload Instantly
                 </button>
@@ -133,7 +120,6 @@
     <!-- HEADER -->
     <header class="bg-slate-900 text-white p-4 shadow-md shrink-0 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 z-30">
         <div class="flex items-center gap-3">
-            <!-- Header S3 Root Logo -->
             <div class="w-9 h-9 bg-slate-800 border border-slate-700 rounded-xl flex items-center justify-center p-1 shrink-0 overflow-hidden">
                 <img src="https://d15si3zl564vcw.cloudfront.net/logo.png" 
                      alt="Verstantly Logo" 
@@ -164,19 +150,15 @@
     <!-- MAIN DASHBOARD CONTENT AREA -->
     <div class="flex-1 flex flex-col md:flex-row overflow-hidden relative">
         
-        <!-- MAIN GALLERY CONTAINER -->
         <div class="flex-1 flex flex-col relative overflow-hidden bg-slate-50 h-full">
-            <!-- PANE-SCOPED IMAGE PREVIEW: covers only the left gallery -->
             <div id="image-modal" class="hidden absolute inset-0 bg-slate-900/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
                 <div class="bg-white rounded-3xl shadow-2xl border border-slate-200 p-4 sm:p-6 max-w-3xl w-full relative flex flex-col max-h-[calc(100%-2rem)]">
                     <button type="button" onclick="closeImageModal()" class="absolute top-4 right-4 z-10 bg-slate-100 hover:bg-slate-200 text-slate-700 w-8 h-8 rounded-full flex items-center justify-center font-bold text-lg focus:outline-none cursor-pointer transition-all" aria-label="Close image preview">&times;</button>
                     
                     <div id="modal-content-area" class="flex flex-col lg:flex-row gap-6 overflow-y-auto h-full p-2">
-                        <!-- Large Image Preview container -->
                         <div class="flex-1 bg-black rounded-2xl overflow-hidden flex items-center justify-center min-h-[300px] max-h-[calc(100vh-12rem)] relative">
                             <img id="modal-img-preview" src="" alt="High Resolution Preview" class="max-h-full max-w-full object-contain select-none" onerror="handleImageLoadError(this)">
                         </div>
-                        <!-- Preview details -->
                         <div class="w-full lg:w-60 flex flex-col justify-between shrink-0 space-y-4">
                             <div>
                                 <span id="modal-badge-lang" class="bg-sky-100 text-sky-700 font-bold text-[10px] px-2.5 py-1 rounded-md uppercase tracking-wider">Language</span>
@@ -193,8 +175,6 @@
             </div>
 
             <main class="flex-1 p-4 md:p-6 overflow-y-auto h-full min-w-0">
-                
-                <!-- SEARCH & SORT CONTROLS -->
                 <div class="mb-5 max-w-full flex flex-col sm:flex-row gap-3">
                     <div class="relative flex-1 flex items-center">
                         <span class="absolute left-4 text-slate-400">
@@ -214,7 +194,6 @@
                         >&times;</button>
                     </div>
 
-                    <!-- Filter Without Reference Button with Dynamic Count Badge -->
                     <button 
                         type="button" 
                         id="filter-missing-ref-btn" 
@@ -226,7 +205,6 @@
                         <span id="missing-ref-count-badge" class="ml-1 bg-slate-100 text-slate-600 px-2 py-0.5 rounded-md font-mono text-[11px]">0</span>
                     </button>
 
-                    <!-- SORT DROPDOWN -->
                     <div class="shrink-0 flex items-center bg-white border border-slate-200 rounded-xl px-3 py-1 shadow-sm focus-within:ring-2 focus-within:ring-sky-100 focus-within:border-sky-500 transition-all">
                         <label for="sort-select" class="text-xs font-bold text-slate-400 uppercase tracking-wider mr-2">Sort:</label>
                         <select id="sort-select" onchange="executeDatabaseSearchFilter()" class="bg-transparent text-xs font-bold text-slate-700 outline-none py-1.5 cursor-pointer">
@@ -238,7 +216,6 @@
                     </div>
                 </div>
 
-                <!-- TRAFFIC METRICS BAR -->
                 <div class="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-5">
                     <div class="bg-white border border-slate-200 rounded-2xl p-4 shadow-sm flex items-center justify-between">
                         <div>
@@ -267,7 +244,6 @@
                     </h2>
                 </div>
                 
-                <!-- GRID DISPLAY -->
                 <div id="image-grid" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4 pb-24 md:pb-12">
                     <div class="col-span-full py-12 text-center">
                         <div class="inline-block animate-spin rounded-full h-8 w-8 border-4 border-sky-500 border-t-transparent mb-3"></div>
@@ -277,7 +253,6 @@
             </main>
         </div>
 
-        <!-- RIGHT WORKSPACE SIDEBAR (PERMANENT RIGHT-HAND SIDE EDITING INSPECTOR - NO PREVIEW IMAGE) -->
         <aside id="edit-sidebar" class="w-full md:w-[420px] lg:w-[460px] bg-white border-l border-slate-200 shadow-none p-6 flex flex-col overflow-y-auto h-full shrink-0 z-40">
             <div id="edit-workspace" class="h-full flex flex-col justify-between">
                 <div class="h-full flex flex-col items-center justify-center text-center p-6 text-slate-400 my-auto">
@@ -291,7 +266,6 @@
         </aside>
     </div>
 
-    <!-- JAVASCRIPT LOGIC -->
     <script>
         const API_BASE_URL = 'https://llmix4d7q6.execute-api.us-east-1.amazonaws.com'; 
         const CLOUDFRONT_DOMAIN = 'd15si3zl564vcw.cloudfront.net';
@@ -321,15 +295,10 @@
         };
 
         function getExpectedPassword() {
-            // OPTIONAL OVERRIDE: Set a static password here (e.g., 'MyStaticPass@123') 
-            // When you want to revert back, simply leave it as an empty string ("")
-            const STATIC_PASSWORD_OVERRIDE = "Verstantly@123"; 
-
+            const STATIC_PASSWORD_OVERRIDE = "Constantly@123"; 
             if (STATIC_PASSWORD_OVERRIDE && STATIC_PASSWORD_OVERRIDE.trim() !== "") {
                 return STATIC_PASSWORD_OVERRIDE.trim();
             }
-
-            // Fallback to existing daily dynamic pattern
             const days = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
             const todayIndex = new Date().getDay();
             return `${days[todayIndex]}@123`;
@@ -338,7 +307,6 @@
         function checkAuthSession() {
             const sessionAuth = sessionStorage.getItem('verstantly_admin_authenticated');
             const loginModal = document.getElementById('login-modal');
-            
             if (sessionAuth === 'true') {
                 loginModal.classList.add('hidden');
                 loadGallery();
@@ -503,8 +471,7 @@
             const language = document.getElementById('upload-language').value;
             const reference = document.getElementById('upload-reference').value;
             const verseText = document.getElementById('upload-verse').value;
-            const generatedFilename =
-                buildFilenameFromReference(reference, file.name) || file.name;
+            const generatedFilename = buildFilenameFromReference(reference, file.name) || file.name;
 
             try {
                 const reader = new FileReader();
@@ -675,7 +642,6 @@
             appState.filteredImages = results;
             updateMissingReferenceCount();
 
-            // Update Search Count Badge
             const countBadge = document.getElementById('search-count-badge');
             if (countBadge) {
                 countBadge.innerText = appState.filteredImages.length;
@@ -821,7 +787,6 @@
                         </div>
                     </div>
 
-                    <!-- METADATA EDIT FORM (PREVIEW IMAGE REMOVED) -->
                     <form id="edit-form" onsubmit="handleSaveImage(event)" class="space-y-4 text-left pb-4">
                         <div>
                             <label class="block text-[10px] font-extrabold text-slate-400 uppercase tracking-wider mb-1">Image Filename</label>
@@ -915,10 +880,8 @@
                     if (idx !== -1) {
                         appState.images[idx].reference = payload.reference;
                         appState.images[idx].verse_text = payload.verse_text;
-                        appState.images[idx].current_filename =
-                            appState.selectedImage.current_filename;
-                        appState.images[idx].s3_key =
-                            appState.selectedImage.s3_key;
+                        appState.images[idx].current_filename = appState.selectedImage.current_filename;
+                        appState.images[idx].s3_key = appState.selectedImage.s3_key;
                     }
 
                     executeDatabaseSearchFilter();
