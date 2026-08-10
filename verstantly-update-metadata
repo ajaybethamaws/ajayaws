@@ -24,9 +24,9 @@ export const handler = async (event) => {
     }
 
     try {
-        // 2. Safely parse the incoming JSON body
+        // 2. Safely parse the incoming JSON body (including bible_version)
         const body = JSON.parse(event.body || "{}");
-        const { image_id, verse_text, reference, requested_filename } = body;
+        const { image_id, verse_text, reference, requested_filename, bible_version } = body;
 
         // Validation check for mandatory payload items
         if (!image_id || !verse_text || !reference || !requested_filename) {
@@ -85,17 +85,18 @@ export const handler = async (event) => {
             s3Renamed = true;
         }
 
-        // 5. Update DynamoDB Item
+        // 5. Update DynamoDB Item (Persisting bible_version alongside other fields)
         const timestamp = new Date().toISOString();
         const updateResult = await docClient.send(new UpdateCommand({
             TableName: TABLE_NAME,
             Key: { image_id },
-            UpdateExpression: "SET current_filename = :fn, s3_key = :key, verse_text = :vt, reference = :ref, updated_at = :uat",
+            UpdateExpression: "SET current_filename = :fn, s3_key = :key, verse_text = :vt, reference = :ref, bible_version = :bv, updated_at = :uat",
             ExpressionAttributeValues: {
                 ":fn": finalFilename,
                 ":key": finalS3Key,
                 ":vt": verse_text,
                 ":ref": reference,
+                ":bv": bible_version || "",
                 ":uat": timestamp
             },
             ReturnValues: "ALL_NEW"
@@ -110,6 +111,7 @@ export const handler = async (event) => {
                     Message: `An asset's metadata or storage details have been updated via the management console.\n\n` +
                              `• Image ID: ${image_id}\n` +
                              `• Reference: ${reference}\n` +
+                             `• Bible Version: ${bible_version || "None"}\n` +
                              `• Verse Text: "${verse_text}"\n` +
                              `• S3 Storage Key: ${finalS3Key}\n` +
                              `• File Renamed: ${s3Renamed ? `Yes (Old path: ${oldS3Key})` : "No"}\n` +
@@ -146,7 +148,6 @@ export const handler = async (event) => {
  * Builds standard API Gateway HTTP Proxy responses with correct CORS configurations
  */
 function buildResponse(statusCode, body, event) {
-    // Extract request origin if present, or fallback to the specific admin domain
     const reqOrigin = event?.headers?.origin || event?.headers?.Origin || "https://admin.verstantly.com";
 
     return {
