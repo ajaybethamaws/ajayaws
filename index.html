@@ -51,7 +51,7 @@
 
     <!-- UPLOAD IMAGE MODAL -->
     <div id="upload-modal" class="hidden fixed inset-0 bg-slate-900/80 backdrop-blur-sm z-[90] flex items-center justify-center p-4 overflow-y-auto">
-        <div class="bg-white rounded-3xl shadow-2xl border border-slate-200 p-6 sm:p-8 max-w-lg w-full relative">
+        <div class="bg-white rounded-3xl shadow-2xl border border-slate-200 p-6 sm:p-8 max-w-lg w-full relative my-8">
             <button type="button" onclick="closeUploadModal()" class="absolute top-5 right-5 text-slate-400 hover:text-slate-600 font-bold text-xl focus:outline-none cursor-pointer">&times;</button>
 
             <div class="text-center mb-6">
@@ -67,7 +67,7 @@
 
             <div id="upload-status-alert" class="hidden p-3 rounded-xl text-xs font-semibold mb-4 text-center"></div>
 
-            <form id="upload-form" onsubmit="handleImageUpload(event)" class="space-y-5">
+            <form id="upload-form" onsubmit="handleImageUpload(event)" class="space-y-4">
                 <div>
                     <label class="block text-[11px] font-extrabold text-sky-600 uppercase tracking-wider mb-2">Select Channel Language</label>
                     <div id="language-pill-group" class="grid grid-cols-3 gap-2">
@@ -88,29 +88,33 @@
                     <label class="block text-[11px] font-extrabold text-sky-600 uppercase tracking-wider mb-2">Choose File</label>
                     <div onclick="document.getElementById('upload-file-input').click()" 
                          id="dropzone"
-                         class="border-2 border-dashed border-slate-300 hover:border-sky-400 bg-slate-50/50 hover:bg-sky-50/30 rounded-2xl p-6 text-center cursor-pointer transition-all flex flex-col items-center justify-center min-h-[110px]">
+                         class="border-2 border-dashed border-slate-300 hover:border-sky-400 bg-slate-50/50 hover:bg-sky-50/30 rounded-2xl p-5 text-center cursor-pointer transition-all flex flex-col items-center justify-center min-h-[90px]">
                         <span id="dropzone-text" class="text-xs font-bold text-slate-700 block">Tap to open Gallery / Camera</span>
                         <span id="dropzone-subtext" class="text-[11px] text-slate-400 font-medium block mt-1">Supports JPEG, PNG, WEBP</span>
                     </div>
                     <input type="file" id="upload-file-input" accept="image/jpeg, image/jpg, image/png, image/webp" class="hidden" onchange="updateFilePreview(this)" required>
                 </div>
 
-                <div>
-                    <label class="block text-[11px] font-extrabold text-slate-600 uppercase tracking-wider mb-1">Bible Reference <span class="text-slate-400 font-normal lowercase">(optional)</span></label>
-                    <div class="flex gap-2">
+                <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <div>
+                        <label class="block text-[11px] font-extrabold text-slate-600 uppercase tracking-wider mb-1">Bible Reference</label>
                         <input type="text" id="upload-reference" placeholder="e.g. Psalm 23:1" class="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-sky-500 focus:bg-white transition-all">
-                        <button type="button" onclick="fetchVerseTextFromDB('upload')" class="bg-slate-900 hover:bg-slate-800 text-white font-bold px-4 py-2.5 rounded-xl text-xs shrink-0 cursor-pointer transition-all">
-                            Fetch Text
-                        </button>
+                    </div>
+                    <div>
+                        <label class="block text-[11px] font-extrabold text-slate-600 uppercase tracking-wider mb-1">Bible Version / Translation</label>
+                        <input type="text" id="upload-version" placeholder="e.g. KJV, NIV, ESV" class="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-sky-500 focus:bg-white transition-all">
                     </div>
                 </div>
 
                 <div>
-                    <label class="block text-[11px] font-extrabold text-slate-600 uppercase tracking-wider mb-1">Scripture Verse Text <span class="text-slate-400 font-normal lowercase">(optional)</span></label>
-                    <textarea id="upload-verse" rows="2" placeholder="Type full scripture text or fetch from database..." class="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-sky-500 focus:bg-white transition-all"></textarea>
+                    <div class="flex items-center justify-between mb-1">
+                        <label class="block text-[11px] font-extrabold text-slate-600 uppercase tracking-wider">Scripture Verse Text</label>
+                        <button type="button" onclick="fetchVerseTextFromDB('upload')" class="text-[11px] font-bold text-sky-600 hover:text-sky-700 cursor-pointer">Fetch from DB &rarr;</button>
+                    </div>
+                    <textarea id="upload-verse" rows="2" placeholder="Type full scripture text or fetch..." class="w-full px-3.5 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs sm:text-sm focus:outline-none focus:ring-2 focus:ring-sky-500 focus:bg-white transition-all"></textarea>
                 </div>
 
-                <button type="submit" id="upload-btn" class="w-full bg-sky-500 hover:bg-sky-600 active:bg-sky-700 text-white font-bold py-3 px-4 rounded-xl text-sm transition-all shadow-md cursor-pointer mt-2">
+                <button type="submit" id="upload-btn" class="w-full bg-sky-500 hover:bg-sky-600 active:bg-sky-700 text-white font-bold py-3 px-4 rounded-xl text-sm transition-all shadow-md cursor-pointer mt-1">
                     Upload Instantly
                 </button>
             </form>
@@ -119,7 +123,6 @@
 
     <!-- HEADER -->
     <header class="bg-slate-900 text-white p-4 shadow-md shrink-0 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 z-30">
-        <!-- Logo with force refresh on click -->
         <div class="flex items-center gap-3 cursor-pointer select-none" onclick="window.location.reload(true)" title="Click to refresh page">
             <div class="w-9 h-9 bg-slate-800 border border-slate-700 rounded-xl flex items-center justify-center p-1 shrink-0 overflow-hidden">
                 <img src="https://d15si3zl564vcw.cloudfront.net/logo.png" 
@@ -146,7 +149,6 @@
                 <div>TA: <span id="count-tamil" class="text-sky-400 font-bold font-mono">...</span></div>
             </div>
 
-            <!-- LOGOUT BUTTON -->
             <button onclick="handleAdminLogout()" class="bg-slate-800 hover:bg-rose-600/20 hover:border-rose-500/50 hover:text-rose-400 border border-slate-700 text-slate-300 text-xs font-bold px-3 py-2 rounded-xl transition-all shadow-sm flex items-center gap-1.5 cursor-pointer" title="Log out of admin session">
                 <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M15 3H7a2 2 0 00-2 2v14a2 2 0 002 2h8m4-10l-4-4m4 4l-4 4m4-4H9"/></svg>
                 Logout
@@ -155,13 +157,13 @@
     </header>
 
     <!-- MAIN DASHBOARD CONTENT AREA -->
-    <!-- Fixed mobile view layout stacking and vertical scrolling container heights -->
     <div class="flex-1 flex flex-col lg:flex-row overflow-hidden relative">
-        
         <div class="flex-1 flex flex-col relative overflow-hidden bg-slate-50 h-full">
+            
+            <!-- PREVIEW MODAL -->
             <div id="image-modal" class="hidden absolute inset-0 bg-slate-900/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
                 <div class="bg-white rounded-3xl shadow-2xl border border-slate-200 p-4 sm:p-6 max-w-3xl w-full relative flex flex-col max-h-[calc(100%-2rem)]">
-                    <button type="button" onclick="closeImageModal()" class="absolute top-4 right-4 z-10 bg-slate-100 hover:bg-slate-200 text-slate-700 w-8 h-8 rounded-full flex items-center justify-center font-bold text-lg focus:outline-none cursor-pointer transition-all" aria-label="Close image preview">&times;</button>
+                    <button type="button" onclick="closeImageModal()" class="absolute top-4 right-4 z-10 bg-slate-100 hover:bg-slate-200 text-slate-700 w-8 h-8 rounded-full flex items-center justify-center font-bold text-lg focus:outline-none cursor-pointer transition-all">&times;</button>
                     
                     <div id="modal-content-area" class="flex flex-col lg:flex-row gap-6 overflow-y-auto h-full p-2">
                         <div class="flex-1 bg-black rounded-2xl overflow-hidden flex items-center justify-center min-h-[300px] max-h-[calc(100vh-12rem)] relative">
@@ -171,6 +173,7 @@
                             <div>
                                 <span id="modal-badge-lang" class="bg-sky-100 text-sky-700 font-bold text-[10px] px-2.5 py-1 rounded-md uppercase tracking-wider">Language</span>
                                 <h3 id="modal-reference" class="text-lg font-bold text-slate-900 mt-2">Reference</h3>
+                                <p id="modal-version-display" class="text-xs text-sky-600 font-bold mt-0.5">Version</p>
                                 <p id="modal-verse-text" class="text-xs text-slate-600 mt-2 leading-relaxed bg-slate-50 p-3 rounded-xl border border-slate-100">Verse text here...</p>
                             </div>
                             <div class="pt-4 border-t border-slate-100 text-xs text-slate-400 font-mono flex items-center justify-between">
@@ -191,7 +194,7 @@
                         <input 
                             type="text" 
                             id="adminSearchInput" 
-                            placeholder="Search image records by reference, text, ID, or file parameters..." 
+                            placeholder="Search by reference, version, verse text, or ID..." 
                             class="w-full pl-11 pr-10 py-2.5 bg-white border border-slate-200 rounded-xl text-sm text-slate-800 placeholder-slate-400 shadow-sm outline-none focus:border-sky-500 focus:ring-2 focus:ring-sky-100 transition-all"
                             oninput="executeDatabaseSearchFilter()"
                         >
@@ -211,6 +214,17 @@
                         <span id="missing-ref-indicator" class="w-2 h-2 rounded-full bg-slate-300"></span>
                         <span>Needs Reference</span>
                         <span id="missing-ref-count-badge" class="ml-1 bg-slate-100 text-slate-600 px-2 py-0.5 rounded-md font-mono text-[11px]">0</span>
+                    </button>
+
+                    <button 
+                        type="button" 
+                        id="filter-translation-needed-btn" 
+                        onclick="toggleTranslationNeededFilter()" 
+                        class="shrink-0 bg-white hover:bg-slate-50 border border-slate-200 text-slate-700 font-bold px-4 py-2.5 rounded-xl text-xs shadow-sm transition-all cursor-pointer flex items-center gap-2"
+                    >
+                        <span id="translation-needed-indicator" class="w-2 h-2 rounded-full bg-slate-300"></span>
+                        <span>Translation Needed (EN)</span>
+                        <span id="translation-needed-count-badge" class="ml-1 bg-slate-100 text-slate-600 px-2 py-0.5 rounded-md font-mono text-[11px]">0</span>
                     </button>
 
                     <div class="shrink-0 flex items-center bg-white border border-slate-200 rounded-xl px-3 py-1 shadow-sm focus-within:ring-2 focus-within:ring-sky-100 focus-within:border-sky-500 transition-all">
@@ -261,7 +275,7 @@
             </main>
         </div>
 
-        <!-- Sidebar layout updated to remain accessible and visible on mobile screen widths -->
+        <!-- RIGHT SIDEBAR INSPECTOR -->
         <aside id="edit-sidebar" class="w-full lg:w-[420px] xl:w-[460px] bg-white border-t lg:border-t-0 lg:border-l border-slate-200 shadow-inner lg:shadow-none p-6 flex flex-col overflow-y-auto max-h-[50vh] lg:max-h-none h-auto lg:h-full shrink-0 z-40">
             <div id="edit-workspace" class="h-full flex flex-col justify-between">
                 <div class="h-full flex flex-col items-center justify-center text-center p-6 text-slate-400 my-auto">
@@ -286,7 +300,8 @@
             selectedImage: null,
             isSaving: false,
             isUploading: false,
-            showOnlyMissingReference: false
+            showOnlyMissingReference: false,
+            showOnlyTranslationNeeded: false
         };
 
         document.addEventListener('DOMContentLoaded', () => {
@@ -341,7 +356,6 @@
             }
         }
 
-        // LOGOUT HANDLER FUNCTION
         window.handleAdminLogout = function() {
             sessionStorage.removeItem('verstantly_admin_authenticated');
             window.location.reload();
@@ -410,12 +424,44 @@
             executeDatabaseSearchFilter();
         };
 
+        window.toggleTranslationNeededFilter = function() {
+            appState.showOnlyTranslationNeeded = !appState.showOnlyTranslationNeeded;
+            
+            const btn = document.getElementById('filter-translation-needed-btn');
+            const indicator = document.getElementById('translation-needed-indicator');
+            const badge = document.getElementById('translation-needed-count-badge');
+
+            if (appState.showOnlyTranslationNeeded) {
+                btn.className = "shrink-0 bg-indigo-500 hover:bg-indigo-600 border border-indigo-600 text-white font-bold px-4 py-2.5 rounded-xl text-xs shadow-sm transition-all cursor-pointer flex items-center gap-2";
+                indicator.className = "w-2 h-2 rounded-full bg-white animate-pulse";
+                badge.className = "ml-1 bg-indigo-600 text-white px-2 py-0.5 rounded-md font-mono text-[11px]";
+            } else {
+                btn.className = "shrink-0 bg-white hover:bg-slate-50 border border-slate-200 text-slate-700 font-bold px-4 py-2.5 rounded-xl text-xs shadow-sm transition-all cursor-pointer flex items-center gap-2";
+                indicator.className = "w-2 h-2 rounded-full bg-slate-300";
+                badge.className = "ml-1 bg-slate-100 text-slate-600 px-2 py-0.5 rounded-md font-mono text-[11px]";
+            }
+
+            executeDatabaseSearchFilter();
+        };
+
+        function isEnglishVerse(img) {
+            const lowerKey = (img.s3_key || '').toLowerCase();
+            return lowerKey.startsWith('english/') || (!lowerKey.startsWith('telugu/') && !lowerKey.startsWith('tamil/'));
+        }
+
         function updateMissingReferenceCount() {
             const missingCount = appState.images.filter(img => !img.reference || img.reference.trim().length === 0).length;
             const badge = document.getElementById('missing-ref-count-badge');
-            if (badge) {
-                badge.innerText = missingCount;
-            }
+            if (badge) badge.innerText = missingCount;
+        }
+
+        function updateTranslationNeededCount() {
+            const translationNeededCount = appState.images.filter(img => {
+                if (!isEnglishVerse(img)) return false;
+                return !img.bible_version || img.bible_version.trim().length === 0;
+            }).length;
+            const badge = document.getElementById('translation-needed-count-badge');
+            if (badge) badge.innerText = translationNeededCount;
         }
 
         function updateAggregatedMetrics() {
@@ -461,9 +507,7 @@
             if (!cleanReference) return '';
 
             const lastDotIndex = existingFilename.lastIndexOf('.');
-            const extension = lastDotIndex > 0
-                ? existingFilename.slice(lastDotIndex)
-                : '';
+            const extension = lastDotIndex > 0 ? existingFilename.slice(lastDotIndex) : '';
 
             return `${cleanReference}${extension}`;
         }
@@ -485,6 +529,7 @@
 
             const language = document.getElementById('upload-language').value;
             const reference = document.getElementById('upload-reference').value;
+            const bibleVersion = document.getElementById('upload-version').value;
             const verseText = document.getElementById('upload-verse').value;
             const generatedFilename = buildFilenameFromReference(reference, file.name) || file.name;
 
@@ -499,6 +544,7 @@
                         filename: generatedFilename,
                         file_type: file.type,
                         reference: reference,
+                        bible_version: bibleVersion,
                         verse_text: verseText,
                         image_data: base64Content
                     };
@@ -541,21 +587,14 @@
                 imgElement.src = 'https://placehold.co/300x200?text=Asset+Not+Found';
                 return;
             }
-
             imgElement.setAttribute('data-fallback-attempted', 'true');
             const originalSrc = imgElement.src;
 
-            if (originalSrc.endsWith('.JPG')) {
-                imgElement.src = originalSrc.replace(/\.JPG$/, '.jpg');
-            } else if (originalSrc.endsWith('.jpg')) {
-                imgElement.src = originalSrc.replace(/\.jpg$/, '.JPG');
-            } else if (originalSrc.endsWith('.JPEG')) {
-                imgElement.src = originalSrc.replace(/\.jpeg$/, '.jpeg');
-            } else if (originalSrc.endsWith('.jpeg')) {
-                imgElement.src = originalSrc.replace(/\.jpeg$/, '.JPEG');
-            } else {
-                imgElement.src = 'https://placehold.co/300x200?text=S3+Asset+Pending';
-            }
+            if (originalSrc.endsWith('.JPG')) imgElement.src = originalSrc.replace(/\.JPG$/, '.jpg');
+            else if (originalSrc.endsWith('.jpg')) imgElement.src = originalSrc.replace(/\.jpg$/, '.JPG');
+            else if (originalSrc.endsWith('.JPEG')) imgElement.src = originalSrc.replace(/\.jpeg$/, '.jpeg');
+            else if (originalSrc.endsWith('.jpeg')) imgElement.src = originalSrc.replace(/\.jpeg$/, '.JPEG');
+            else imgElement.src = 'https://placehold.co/300x200?text=S3+Asset+Pending';
         };
 
         function calculateLanguageMetrics() {
@@ -583,6 +622,7 @@
                 
                 calculateLanguageMetrics();
                 updateMissingReferenceCount();
+                updateTranslationNeededCount();
                 updateAggregatedMetrics();
                 executeDatabaseSearchFilter();
             } catch (err) {
@@ -596,9 +636,7 @@
 
         function sortLikeLambda(items, reverse = true) {
             return [...items].sort((a, b) => {
-                const getSortVal = (item) => 
-                    item.sort_value ?? item.created_at ?? item.timestamp ?? item.date ?? '';
-
+                const getSortVal = (item) => item.sort_value ?? item.created_at ?? item.timestamp ?? item.date ?? '';
                 const aVal = String(getSortVal(a));
                 const bVal = String(getSortVal(b));
 
@@ -616,8 +654,7 @@
 
                 const aKey = String(a.s3_key || '');
                 const bKey = String(b.s3_key || '');
-                const comp = aKey.localeCompare(bKey, undefined, { numeric: true });
-                return reverse ? -comp : comp;
+                return reverse ? -bKey.localeCompare(aKey, undefined, { numeric: true }) : aKey.localeCompare(bKey, undefined, { numeric: true });
             });
         }
 
@@ -626,9 +663,7 @@
             const sortMode = document.getElementById('sort-select')?.value || 'newest';
             const clearBtn = document.getElementById('clearSearchBtn');
 
-            if (clearBtn) {
-                clearBtn.classList.toggle('hidden', query.length === 0);
-            }
+            if (clearBtn) clearBtn.classList.toggle('hidden', query.length === 0);
 
             let results = appState.images.filter(img => {
                 if (appState.showOnlyMissingReference) {
@@ -636,31 +671,32 @@
                     if (hasRef) return false;
                 }
 
+                if (appState.showOnlyTranslationNeeded) {
+                    if (!isEnglishVerse(img)) return false;
+                    const hasVersion = img.bible_version && img.bible_version.trim().length > 0;
+                    if (hasVersion) return false;
+                }
+
                 if (!query) return true;
                 const ref = (img.reference || '').toLowerCase();
+                const version = (img.bible_version || '').toLowerCase();
                 const verse = (img.verse_text || '').toLowerCase();
                 const id = (img.image_id || img.id || '').toLowerCase();
                 const key = (img.s3_key || '').toLowerCase();
-                return ref.includes(query) || verse.includes(query) || id.includes(query) || key.includes(query);
+                return ref.includes(query) || version.includes(query) || verse.includes(query) || id.includes(query) || key.includes(query);
             });
 
-            if (sortMode === 'newest') {
-                results = sortLikeLambda(results, true);
-            } else if (sortMode === 'oldest') {
-                results = sortLikeLambda(results, false);
-            } else if (sortMode === 'views-desc') {
-                results.sort((a, b) => (Number(b.views) || 0) - (Number(a.views) || 0));
-            } else if (sortMode === 'views-asc') {
-                results.sort((a, b) => (Number(a.views) || 0) - (Number(b.views) || 0));
-            }
+            if (sortMode === 'newest') results = sortLikeLambda(results, true);
+            else if (sortMode === 'oldest') results = sortLikeLambda(results, false);
+            else if (sortMode === 'views-desc') results.sort((a, b) => (Number(b.views) || 0) - (Number(a.views) || 0));
+            else if (sortMode === 'views-asc') results.sort((a, b) => (Number(a.views) || 0) - (Number(b.views) || 0));
 
             appState.filteredImages = results;
             updateMissingReferenceCount();
+            updateTranslationNeededCount();
 
             const countBadge = document.getElementById('search-count-badge');
-            if (countBadge) {
-                countBadge.innerText = appState.filteredImages.length;
-            }
+            if (countBadge) countBadge.innerText = appState.filteredImages.length;
 
             renderGrid();
         }
@@ -687,6 +723,7 @@
             const modal = document.getElementById('image-modal');
             const previewImg = document.getElementById('modal-img-preview');
             const refEl = document.getElementById('modal-reference');
+            const versionEl = document.getElementById('modal-version-display');
             const verseEl = document.getElementById('modal-verse-text');
             const idEl = document.getElementById('modal-image-id');
             const viewsEl = document.getElementById('modal-views');
@@ -694,6 +731,7 @@
 
             previewImg.src = `https://${CLOUDFRONT_DOMAIN}/${found.s3_key}`;
             refEl.innerText = found.reference || 'Untitled Verse';
+            versionEl.innerText = found.bible_version ? `Version: ${found.bible_version}` : 'No version specified';
             verseEl.innerText = found.verse_text || 'No text snippet added...';
             idEl.innerText = `ID: ${found.image_id || found.id || ''}`;
             viewsEl.innerText = `${found.views ?? 0} views`;
@@ -735,6 +773,7 @@
                 const imgId = img.image_id || img.id || '';
                 const isSelected = appState.selectedImage && (appState.selectedImage.image_id || appState.selectedImage.id) === imgId;
                 const viewCount = img.views ?? 0;
+                const versionBadge = img.bible_version ? `<span class="bg-sky-50 text-sky-600 px-1.5 py-0.5 rounded font-bold">${img.bible_version}</span>` : '';
                 
                 return `
                     <div 
@@ -761,7 +800,10 @@
 
                         <div class="p-3 flex-1 flex flex-col justify-between">
                             <div>
-                                <p class="text-xs font-bold text-slate-800 truncate">${img.reference || 'Untitled Verse'}</p>
+                                <div class="flex items-center justify-between gap-1">
+                                    <p class="text-xs font-bold text-slate-800 truncate">${img.reference || 'Untitled Verse'}</p>
+                                    <div class="text-[10px] shrink-0">${versionBadge}</div>
+                                </div>
                                 <p class="text-[11px] text-slate-500 line-clamp-2 mt-0.5">${img.verse_text || 'No text snippet added...'}</p>
                             </div>
                             <div class="mt-2 pt-2 border-t border-slate-100 flex items-center justify-between text-[10px] text-slate-400 font-mono">
@@ -802,29 +844,33 @@
                         </div>
                     </div>
 
-                    <form id="edit-form" onsubmit="handleSaveImage(event)" class="space-y-4 text-left pb-4">
+                    <form id="edit-form" onsubmit="handleSaveImage(event)" class="space-y-3 text-left pb-4">
                         <div>
                             <label class="block text-[10px] font-extrabold text-slate-400 uppercase tracking-wider mb-1">Image Filename</label>
                             <input type="text" id="edit-filename" value="${img.current_filename || (img.s3_key || '').split('/').pop() || ''}" required class="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-xs font-mono text-slate-700 focus:bg-white focus:ring-2 focus:ring-sky-500 focus:outline-none">
                         </div>
 
-                        <div>
-                            <label class="block text-[10px] font-extrabold text-slate-400 uppercase tracking-wider mb-1">Bible Reference</label>
-                            <div class="flex gap-2">
-                                <input type="text" id="edit-reference" value="${img.reference || ''}" class="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm font-bold text-slate-900 focus:bg-white focus:ring-2 focus:ring-sky-500 focus:outline-none">
-                                <button type="button" onclick="fetchVerseTextFromDB('edit')" class="bg-slate-900 hover:bg-slate-800 text-white font-bold px-3 py-2 rounded-xl text-xs shrink-0 cursor-pointer transition-all">
-                                    Fetch
-                                </button>
+                        <div class="grid grid-cols-2 gap-2">
+                            <div>
+                                <label class="block text-[10px] font-extrabold text-slate-400 uppercase tracking-wider mb-1">Bible Reference</label>
+                                <input type="text" id="edit-reference" value="${img.reference || ''}" class="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-xs font-bold text-slate-900 focus:bg-white focus:ring-2 focus:ring-sky-500 focus:outline-none">
+                            </div>
+                            <div>
+                                <label class="block text-[10px] font-extrabold text-slate-400 uppercase tracking-wider mb-1">Bible Version</label>
+                                <input type="text" id="edit-version" value="${img.bible_version || ''}" placeholder="KJV, NIV..." class="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-xs font-bold text-sky-700 focus:bg-white focus:ring-2 focus:ring-sky-500 focus:outline-none">
                             </div>
                         </div>
 
                         <div>
-                            <label class="block text-[10px] font-extrabold text-slate-400 uppercase tracking-wider mb-1">Full Verse Text</label>
-                            <textarea id="edit-verse" rows="6" class="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs sm:text-sm text-slate-800 leading-relaxed focus:bg-white focus:ring-2 focus:ring-sky-500 focus:outline-none">${img.verse_text || ''}</textarea>
+                            <div class="flex items-center justify-between mb-1">
+                                <label class="block text-[10px] font-extrabold text-slate-400 uppercase tracking-wider">Full Verse Text</label>
+                                <button type="button" onclick="fetchVerseTextFromDB('edit')" class="text-[10px] font-bold text-sky-600 hover:text-sky-700 cursor-pointer">Fetch Text &rarr;</button>
+                            </div>
+                            <textarea id="edit-verse" rows="5" class="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-xs text-slate-800 leading-relaxed focus:bg-white focus:ring-2 focus:ring-sky-500 focus:outline-none">${img.verse_text || ''}</textarea>
                         </div>
 
-                        <div class="pt-2">
-                            <button type="submit" id="save-btn" class="w-full bg-sky-500 hover:bg-sky-600 active:bg-sky-700 text-white font-bold py-3 px-4 rounded-xl shadow-md text-xs sm:text-sm transition-all cursor-pointer">
+                        <div class="pt-2 space-y-2">
+                            <button type="submit" id="save-btn" class="w-full bg-sky-500 hover:bg-sky-600 active:bg-sky-700 text-white font-bold py-2.5 px-4 rounded-xl shadow-md text-xs transition-all cursor-pointer">
                                 Save Changes
                             </button>
                         </div>
@@ -836,14 +882,8 @@
             const referenceInput = document.getElementById('edit-reference');
 
             const autoPopulateFilename = () => {
-                const generatedFilename = buildFilenameFromReference(
-                    referenceInput.value,
-                    filenameInput.value
-                );
-
-                if (generatedFilename) {
-                    filenameInput.value = generatedFilename;
-                }
+                const generatedFilename = buildFilenameFromReference(referenceInput.value, filenameInput.value);
+                if (generatedFilename) filenameInput.value = generatedFilename;
             };
 
             referenceInput.addEventListener('input', autoPopulateFilename);
@@ -856,6 +896,7 @@
             const saveBtn = document.getElementById('save-btn');
             const filenameInput = document.getElementById('edit-filename');
             const referenceInput = document.getElementById('edit-reference');
+            const versionInput = document.getElementById('edit-version');
             const verseInput = document.getElementById('edit-verse');
 
             appState.isSaving = true;
@@ -869,6 +910,7 @@
                 s3_key: appState.selectedImage.s3_key,
                 requested_filename: filenameInput.value.trim(),
                 reference: referenceInput.value.trim(),
+                bible_version: versionInput.value.trim(),
                 verse_text: verseInput.value.trim()
             };
 
@@ -885,15 +927,15 @@
                     const updatedData = result.data || {};
 
                     appState.selectedImage.reference = payload.reference;
+                    appState.selectedImage.bible_version = payload.bible_version;
                     appState.selectedImage.verse_text = payload.verse_text;
-                    appState.selectedImage.current_filename =
-                        updatedData.current_filename || payload.requested_filename;
-                    appState.selectedImage.s3_key =
-                        updatedData.s3_key || appState.selectedImage.s3_key;
+                    appState.selectedImage.current_filename = updatedData.current_filename || payload.requested_filename;
+                    appState.selectedImage.s3_key = updatedData.s3_key || appState.selectedImage.s3_key;
                     
                     const idx = appState.images.findIndex(i => (i.image_id || i.id) === imgId);
                     if (idx !== -1) {
                         appState.images[idx].reference = payload.reference;
+                        appState.images[idx].bible_version = payload.bible_version;
                         appState.images[idx].verse_text = payload.verse_text;
                         appState.images[idx].current_filename = appState.selectedImage.current_filename;
                         appState.images[idx].s3_key = appState.selectedImage.s3_key;
@@ -901,6 +943,7 @@
 
                     executeDatabaseSearchFilter();
                     renderEditSidebar();
+                    
                     const refreshedSaveBtn = document.getElementById('save-btn');
                     if (refreshedSaveBtn) {
                         refreshedSaveBtn.innerText = 'Saved Successfully!';
@@ -924,7 +967,7 @@
                 alert('Network error while saving changes.');
                 saveBtn.innerText = 'Save Changes';
                 saveBtn.disabled = false;
-                    appState.isSaving = false;
+                appState.isSaving = false;
             }
         }
     </script>
