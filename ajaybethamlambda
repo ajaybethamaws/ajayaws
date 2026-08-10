@@ -18,6 +18,31 @@ CLOUDFRONT_BASE = f"https://{CLOUDFRONT_DOMAIN}"
 S3_DIRECT_URL = f"https://{BUCKET_NAME}.s3.{REGION}.amazonaws.com"
 SUBSCRIBER_URL = "https://dpqshmdcgoahjdfxae56f65evy0ohfvl.lambda-url.us-east-1.on.aws/"
 
+# --- BIBLE TRANSLATION COPYRIGHT MAPPINGS ---
+BIBLE_COPYRIGHTS = {
+    "NIV": "Scripture quotations taken from The Holy Bible, New International Version® NIV® Copyright © 1973, 1978, 1984, 2011 by Biblica, Inc. Used by permission of Zondervan.",
+    "ESV": "The Holy Bible, English Standard Version® (ESV®) Copyright © 2001 by Crossway, a publishing ministry of Good News Publishers. All rights reserved.",
+    "KJV": "King James Version - Public Domain",
+    "NLT": "Holy Bible, New Living Translation, copyright © 1996, 2004, 2015 by Tyndale House Foundation. Used by permission.",
+    "MSG": "Scripture quotations from THE MESSAGE. Copyright © by Eugene H. Peterson 1993, 2002, 2005, 2018. Used by permission of NavPress. All rights reserved.",
+    "TELUGU": "Telugu Bible text courtesy of The Bible Society of India. Used by permission.",
+    "TAMIL": "Tamil Bible text courtesy of The Bible Society of India. Used by permission."
+}
+
+def get_copyright_text(version, folder_prefix):
+    # Static courtesy statement for Telugu and Tamil assets by default without Dynamo DB look up
+    folder_lower = folder_prefix.lower()
+    if folder_lower == "telugu/":
+        return BIBLE_COPYRIGHTS["TELUGU"]
+    elif folder_lower == "tamil/":
+        return BIBLE_COPYRIGHTS["TAMIL"]
+    
+    # Restrict English copyright notices to English assets only
+    if folder_lower != "english/" or not version:
+        return ""
+    clean_ver = version.upper().strip()
+    return BIBLE_COPYRIGHTS.get(clean_ver, "")
+
 # Low-latency client tuning config
 dynamo_config = Config(retries={'max_attempts': 2}, tcp_keepalive=True, max_pool_connections=50)
 dynamo_client = boto3.client('dynamodb', region_name=REGION, config=dynamo_config)
@@ -71,11 +96,15 @@ def get_cached_db_assets(folder_prefix, search_query=''):
                         ''
                     )
                     
+                    version_val = item.get('bible_version', {}).get('S', '')
+                    
                     filtered_group.append({
                         'id': item.get('image_id', {}).get('S', ''),
                         's3_key': s3_key,
                         'reference': item.get('reference', {}).get('S', ''),
                         'verse_text': item.get('verse_text', {}).get('S', ''),
+                        'bible_version': version_val,
+                        'copyright': get_copyright_text(version_val, folder_prefix),
                         'sort_value': raw_ts
                     })
             
@@ -117,12 +146,15 @@ def get_single_db_asset(image_id, folder_prefix):
             if not s3_key.lower().startswith(folder_prefix.lower()):
                 logger.warning(f"Asset {image_id} found but belongs to path {s3_key}, which doesn't match expected prefix {folder_prefix}")
                 return None
-                
+               
+            version_val = item.get('bible_version', {}).get('S', '') 
             return {
                 'id': item.get('image_id', {}).get('S', ''),
                 's3_key': s3_key,
                 'reference': item.get('reference', {}).get('S', ''),
-                'verse_text': item.get('verse_text', {}).get('S', '')
+                'verse_text': item.get('verse_text', {}).get('S', ''),
+                'bible_version': version_val,
+                'copyright': get_copyright_text(version_val, folder_prefix)
             }
     except Exception as e:
         logger.error(f"Failed direct target item lookup query on ID [{image_id}]: {str(e)}")
@@ -324,13 +356,16 @@ def lambda_handler(event, context):
         h += '.lightbox { display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(15, 23, 42, 0.95); backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px); z-index: 200; align-items: center; justify-content: center; opacity: 0; transition: opacity 0.3s ease; touch-action: none; }'
         h += '.lightbox.show { display: flex; opacity: 1; }'
         h += '.lightbox-content { position: relative; max-width: 90vw; max-height: 85vh; display: flex; flex-direction: column; align-items: center; transition: transform 0.2s ease; }'
-        h += '.img-frame { position: relative; display: inline-flex; max-width: 100%; max-height: 65vh; }'
-        h += '.lightbox-img { max-width: 100%; max-height: 65vh; border-radius: 16px; box-shadow: 0 25px 50px -12px rgba(0,0,0,0.5); border: 1px solid rgba(255,255,255,0.1); object-fit: contain; user-select: none; -webkit-user-select: none; -webkit-user-drag: none; -webkit-touch-callout: none; }'
+        h += '.img-frame { position: relative; display: inline-flex; max-width: 100%; max-height: 60vh; }'
+        h += '.lightbox-img { max-width: 100%; max-height: 60vh; border-radius: 16px; box-shadow: 0 25px 50px -12px rgba(0,0,0,0.5); border: 1px solid rgba(255,255,255,0.1); object-fit: contain; user-select: none; -webkit-user-select: none; -webkit-user-drag: none; -webkit-touch-callout: none; }'
         h += '.protection-shield { position: absolute; top: 0; left: 0; width: 100%; height: 100%; z-index: 202; background: transparent; -webkit-touch-callout: none; }'
         h += '.watermark-overlay { position: absolute; bottom: 16px; left: 50%; transform: translateX(-50%); width: 45px; height: 45px; opacity: 0.65; pointer-events: none; z-index: 205; filter: drop-shadow(0px 2px 4px rgba(0,0,0,0.5)); }'
         h += '.watermark-overlay img { width: 100%; height: 100%; object-fit: contain; }'
         
-        h += '.lightbox-actions { display: flex; gap: 24px; margin-top: 24px; z-index: 210; background: rgba(30, 41, 59, 0.6); padding: 8px 24px; border-radius: 30px; border: 1px solid rgba(255,255,255,0.08); backdrop-filter: blur(8px); }'
+        # LIGHTBOX COPYRIGHT FOOTER STYLING
+        h += '.lightbox-copyright { font-size: 10px; color: #94a3b8; text-align: center; max-width: 500px; margin-top: 12px; line-height: 1.4; padding: 0 10px; word-break: break-word; }'
+        
+        h += '.lightbox-actions { display: flex; gap: 24px; margin-top: 18px; z-index: 210; background: rgba(30, 41, 59, 0.6); padding: 8px 24px; border-radius: 30px; border: 1px solid rgba(255,255,255,0.08); backdrop-filter: blur(8px); }'
         h += '.lightbox-btn { width: 44px; height: 44px; display: flex; justify-content: center; align-items: center; cursor: pointer; transition: 0.25s; color: #94a3b8; }'
         h += '.lightbox-btn:hover { transform: scale(1.1); color: #38bdf8; }'
         h += '.lightbox-btn.close-btn:hover { color: #f43f5e; }'
@@ -392,7 +427,11 @@ def lambda_handler(event, context):
         client_js_array = []
         for idx, img in enumerate(images):
             full_cf_url = f"{CLOUDFRONT_BASE}/{img['s3_key']}"
-            client_js_array.append({'id': img['id'], 'url': full_cf_url})
+            client_js_array.append({
+                'id': img['id'], 
+                'url': full_cf_url,
+                'copyright': img.get('copyright', '')
+            })
             
             h += f'<div class="grid-item" id="tile-{img["id"]}" onclick="openLightbox({idx})">'
             h += f'<img src="{full_cf_url}" loading="lazy" alt="Verse Asset">'
@@ -407,6 +446,7 @@ def lambda_handler(event, context):
         h += '      <div class="protection-shield"></div>'
         h += '      <div class="watermark-overlay"><img src="/logo.png" alt="Watermark Logo"></div>'
         h += '    </div>'
+        h += '    <div id="lightbox-copyright" class="lightbox-copyright"></div>'
         h += '    <div class="lightbox-actions">'
         h += '      <div class="lightbox-btn" onclick="prevAsset()" title="Previous Image">'
         h += '        <svg width="24" height="24" fill="currentColor" viewBox="0 0 24 24"><path d="M15.41 7.41L14 6l-6 6 6 6 1.41-1.41L10.83 12z"/></svg>'
@@ -448,10 +488,11 @@ def lambda_handler(event, context):
         h += '  }'
         h += '}'
         
-        # BACKGROUND FETCH TO TRACK ALBUM VIEWS
+        # BACKGROUND FETCH TO TRACK ALBUM VIEWS & POPULATE COPYRIGHT
         h += 'function openLightbox(index) {'
         h += '  activeIdx = index;'
         h += '  lbImg.src = metadataVault[index].url;'
+        h += '  document.getElementById("lightbox-copyright").innerText = metadataVault[index].copyright || "";'
         h += '  lb.classList.add("show");'
         h += '  lbContent.style.transform = "translateY(0)";'
         h += '  const targetId = metadataVault[index].id;'
@@ -538,5 +579,6 @@ def lambda_handler(event, context):
 
         return {'statusCode': 200, 'headers': {'Content-Type': 'text/html'}, 'body': h}
     except Exception as e:
+    
         logger.error(str(e))
         return {'statusCode': 500, 'body': 'System Error'}
