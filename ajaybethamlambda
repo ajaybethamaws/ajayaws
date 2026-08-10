@@ -23,6 +23,7 @@ BIBLE_COPYRIGHTS = {
     "NIV": "Scripture quotations taken from The Holy Bible, New International Version® NIV® Copyright © 1973, 1978, 1984, 2011 by Biblica, Inc. Used by permission of Zondervan.",
     "ESV": "The Holy Bible, English Standard Version® (ESV®) Copyright © 2001 by Crossway, a publishing ministry of Good News Publishers. All rights reserved.",
     "KJV": "King James Version - Public Domain",
+    "NKJV": "Scripture taken from the New King James Version®. Copyright © 1982 by Thomas Nelson. Used by permission. All rights reserved.",
     "NLT": "Holy Bible, New Living Translation, copyright © 1996, 2004, 2015 by Tyndale House Foundation. Used by permission.",
     "MSG": "Scripture quotations from THE MESSAGE. Copyright © by Eugene H. Peterson 1993, 2002, 2005, 2018. Used by permission of NavPress. All rights reserved.",
     "TELUGU": "Telugu Bible text courtesy of The Bible Society of India. Used by permission.",
@@ -114,7 +115,7 @@ def get_cached_db_assets(folder_prefix, search_query=''):
         except Exception as e:
             logger.error(f"Error executing synchronous cache compilation: {str(e)}")
             
-    # Apply search filter if search_query is present
+    # Apply search filter if search_query is present (includes bible_version now)
     base_items = image_cache[cache_key]['items']
     if search_query:
         query_lower = search_query.lower().strip()
@@ -122,6 +123,7 @@ def get_cached_db_assets(folder_prefix, search_query=''):
         for img in base_items:
             if (query_lower in str(img.get('reference', '')).lower()) or \
                (query_lower in str(img.get('verse_text', '')).lower()) or \
+               (query_lower in str(img.get('bible_version', '')).lower()) or \
                (query_lower in str(img.get('id', '')).lower()) or \
                (query_lower in str(img.get('s3_key', '')).lower()):
                 searched_items.append(img)
@@ -579,6 +581,5 @@ def lambda_handler(event, context):
 
         return {'statusCode': 200, 'headers': {'Content-Type': 'text/html'}, 'body': h}
     except Exception as e:
-    
         logger.error(str(e))
         return {'statusCode': 500, 'body': 'System Error'}
