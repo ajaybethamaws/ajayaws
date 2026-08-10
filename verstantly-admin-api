@@ -1,4 +1,4 @@
-import { S3Client, ListObjectsV2Command, HeadObjectCommand, CopyObjectCommand, DeleteObjectCommand } from "@aws-sdk/client-s3";
+import { S3Client, ListObjectsV2Command, HeadObjectCommand, CopyObjectCommand, DeleteObjectCommand, PutObjectCommand } from "@aws-sdk/client-s3";
 import { DynamoDBClient, ScanCommand, PutItemCommand, UpdateItemCommand } from "@aws-sdk/client-dynamodb";
 import { SNSClient, PublishCommand } from "@aws-sdk/client-sns";
 
@@ -72,6 +72,86 @@ export const handler = async (event, context) => {
         }
 
         // ==========================================
+        // ROUTE: UPLOAD NEW IMAGE
+        // ==========================================
+        if (httpMethod === "POST" && path.includes("/images/upload")) {
+            const body = JSON.parse(event.body || "{}");
+            const { language, filename, file_type, reference, verse_text, bible_version, image_data } = body;
+
+            if (!filename || !image_data) {
+                return {
+                    statusCode: 400,
+                    headers: { "Content-Type": "application/json", ...corsHeaders },
+                    body: JSON.stringify({ success: false, message: "Missing required filename or image data." })
+                };
+            }
+
+            // Determine correct S3 folder prefix based on selected language
+            let folderPrefix = "";
+            const cleanLang = (language || "english").toLowerCase();
+            if (cleanLang === "telugu") folderPrefix = "telugu/";
+            else if (cleanLang === "tamil") folderPrefix = "tamil/";
+            else if (cleanLang === "english") folderPrefix = "english/";
+
+            let finalS3Key = `${folderPrefix}${filename}`;
+            let baseName = filename.substring(0, filename.lastIndexOf('.')) || filename;
+            let fileExt = filename.substring(filename.lastIndexOf('.')) || '';
+
+            // Handle name collisions in S3
+            let suffixCounter = 0;
+            let isCollision = true;
+            while (isCollision) {
+                const testFileName = suffixCounter === 0 
+                    ? `${baseName}${fileExt}` 
+                    : `${baseName}_${suffixCounter}${fileExt}`;
+                
+                finalS3Key = `${folderPrefix}${testFileName}`;
+
+                try {
+                    await s3.send(new HeadObjectCommand({ Bucket: BUCKET_NAME, Key: finalS3Key }));
+                    suffixCounter++; 
+                } catch (s3Error) {
+                    if (s3Error.name === "NotFound" || s3Error.$metadata?.httpStatusCode === 404) {
+                        isCollision = false; 
+                    } else {
+                        throw s3Error; 
+                    }
+                }
+            }
+
+            const buffer = Buffer.from(image_data, 'base64');
+            await s3.send(new PutObjectCommand({
+                Bucket: BUCKET_NAME,
+                Key: finalS3Key,
+                Body: buffer,
+                ContentType: file_type || "image/jpeg"
+            }));
+
+            const newId = `img_${Math.random().toString(36).substring(2, 9)}`;
+            const s3EpochTimestamp = Math.floor(Date.now() / 1000).toString();
+            const actualFileName = finalS3Key.split('/').pop();
+
+            await dynamo.send(new PutItemCommand({
+                TableName: TABLE_NAME,
+                Item: {
+                    "image_id": { S: newId },
+                    "s3_key": { S: finalS3Key },
+                    "current_filename": { S: actualFileName },
+                    "reference": { S: reference || "" },
+                    "verse_text": { S: verse_text || "" },
+                    "bible_version": { S: bible_version || "" },
+                    "created_at": { S: s3EpochTimestamp }
+                }
+            }));
+
+            return {
+                statusCode: 200,
+                headers: { "Content-Type": "application/json", ...corsHeaders },
+                body: JSON.stringify({ success: true, message: "Image uploaded successfully", image_id: newId, s3_key: finalS3Key })
+            };
+        }
+
+        // ==========================================
         // ROUTE 1: FETCH IMAGES & AUTO-SYNC S3
         // ==========================================
         if (httpMethod === "GET" && path.includes("/images") && !path.includes("/update") && !path.includes("/counts") && !path.includes("/view")) {
@@ -139,6 +219,7 @@ export const handler = async (event, context) => {
                         current_filename: matchedItem.current_filename?.S || targetKey.split('/').pop(),
                         reference: matchedItem.reference?.S || "",
                         verse_text: matchedItem.verse_text?.S || "",
+                        bible_version: matchedItem.bible_version?.S || "",
                         created_at: matchedItem.created_at?.S || s3EpochTimestamp,
                         views: matchedItem.views?.N ? parseInt(matchedItem.views.N, 10) : 0
                     });
@@ -154,6 +235,7 @@ export const handler = async (event, context) => {
                             "current_filename": { S: fileName },
                             "reference": { S: "" },
                             "verse_text": { S: "" },
+                            "bible_version": { S: "" },
                             "created_at": { S: s3EpochTimestamp }
                         }
                     }));
@@ -164,6 +246,7 @@ export const handler = async (event, context) => {
                         current_filename: fileName,
                         reference: "",
                         verse_text: "",
+                        bible_version: "",
                         created_at: s3EpochTimestamp,
                         views: 0
                     });
@@ -183,18 +266,15 @@ export const handler = async (event, context) => {
         }
 
         // ==========================================
-        // ROUTE 2: UPDATE METADATA & SAFE S3 RENAME (Matches PUT /images/* and PUT /images/update)
+        // ROUTE 2: UPDATE METADATA & SAFE S3 RENAME
         // ==========================================
         if (httpMethod === "PUT" && path.includes("/images")) {
             const body = JSON.parse(event.body || "{}");
-            console.log("PUT payload received:", body);
-
-            // Extract image_id either from body or from path URL (/images/img_9gf8j7b)
             const pathParts = path.split('/');
             const pathId = pathParts[pathParts.length - 1];
             const image_id = body.image_id || body.id || (pathId !== "update" && pathId !== "images" ? pathId : null);
             
-            const { s3_key, reference, verse_text, requested_filename } = body;
+            const { s3_key, reference, verse_text, requested_filename, bible_version } = body;
 
             if (!image_id) {
                 return {
@@ -204,7 +284,6 @@ export const handler = async (event, context) => {
                 };
             }
 
-            // Fallback: If s3_key isn't provided in payload, look up current state from DynamoDB
             let currentS3Key = s3_key;
             if (!currentS3Key) {
                 const dbRes = await dynamo.send(new ScanCommand({ TableName: TABLE_NAME }));
@@ -275,22 +354,23 @@ export const handler = async (event, context) => {
             await dynamo.send(new UpdateItemCommand({
                 TableName: TABLE_NAME,
                 Key: { "image_id": { S: image_id } },
-                UpdateExpression: "SET #ref = :r, #vxt = :v, #fnm = :f, #s3k = :k",
+                UpdateExpression: "SET #ref = :r, #vxt = :v, #fnm = :f, #s3k = :k, #bv = :b",
                 ExpressionAttributeNames: {
                     "#ref": "reference",
                     "#vxt": "verse_text",
                     "#fnm": "current_filename",
-                    "#s3k": "s3_key"
+                    "#s3k": "s3_key",
+                    "#bv": "bible_version"
                 },
                 ExpressionAttributeValues: {
                     ":r": { S: reference || "" },
                     ":v": { S: verse_text || "" },
                     ":f": { S: finalFileName || currentFileName },
-                    ":k": { S: finalS3Key }
+                    ":k": { S: finalS3Key },
+                    ":b": { S: bible_version || "" }
                 }
             }));
 
-            // --- SNS ALERT DISPATCH ---
             try {
                 const topicArn = process.env.SNS_TOPIC_ARN;
                 if (topicArn) {
@@ -299,6 +379,7 @@ export const handler = async (event, context) => {
                         "========================================",
                         `Asset Identifier : ${image_id}`,
                         `Assigned Reference : ${reference || "None Provided"}`,
+                        `Bible Version      : ${bible_version || "None Provided"}`,
                         `Updated S3 Location: s3://${BUCKET_NAME}/${finalS3Key}`,
                         "----------------------------------------",
                         "Scripture Content Preview:",
@@ -322,7 +403,7 @@ export const handler = async (event, context) => {
                 headers: { "Content-Type": "application/json", ...corsHeaders },
                 body: JSON.stringify({
                     success: true,
-                    data: { image_id, s3_key: finalS3Key, current_filename: finalFileName || currentFileName, reference, verse_text }
+                    data: { image_id, s3_key: finalS3Key, current_filename: finalFileName || currentFileName, reference, verse_text, bible_version }
                 })
             };
         }
