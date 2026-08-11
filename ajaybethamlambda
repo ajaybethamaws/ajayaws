@@ -3,6 +3,7 @@ import boto3
 import logging
 import time
 import base64
+from urllib.parse import parse_qs
 from botocore.config import Config
 
 # --- GLOBAL INITIALIZATION ---
@@ -31,14 +32,12 @@ BIBLE_COPYRIGHTS = {
 }
 
 def get_copyright_text(version, folder_prefix):
-    # Static courtesy statement for Telugu and Tamil assets by default without Dynamo DB look up
     folder_lower = folder_prefix.lower()
     if folder_lower == "telugu/":
         return BIBLE_COPYRIGHTS["TELUGU"]
     elif folder_lower == "tamil/":
         return BIBLE_COPYRIGHTS["TAMIL"]
     
-    # Restrict English copyright notices to English assets only
     if folder_lower != "english/" or not version:
         return ""
     clean_ver = version.upper().strip()
@@ -56,15 +55,23 @@ image_cache = {
 }
 CACHE_TTL_SECONDS = 300  # 5-minute global cache window
 
+def ensure_dict(value, default=None):
+    """Return a dictionary when Lambda/API Gateway supplied JSON as a string."""
+    fallback = {} if default is None else default
+    if isinstance(value, dict):
+        return value
+    if isinstance(value, str):
+        try:
+            decoded = json.loads(value)
+            return decoded if isinstance(decoded, dict) else fallback
+        except (TypeError, ValueError):
+            return fallback
+    return fallback
+
 def get_cached_db_assets(folder_prefix, search_query=''):
-    """
-    Pulls normalized library documents directly from DynamoDB instead of scanning raw S3 storage keys.
-    Separates assets into Language groups based on the folder path segment prefix mapping and filters by search query if provided.
-    """
     global image_cache
     current_time = time.time()
     
-    # Map cache key identifier from folder prefix safely
     if folder_prefix == "telugu/":
         cache_key = 'telugu'
     elif folder_prefix == "tamil/":
@@ -75,7 +82,6 @@ def get_cached_db_assets(folder_prefix, search_query=''):
     if not image_cache[cache_key]['items'] or (current_time - image_cache[cache_key]['last_updated'] > CACHE_TTL_SECONDS):
         logger.info(f"Database layout cache stale for category [{cache_key}]. Re-indexing from DynamoDB table...")
         try:
-            # High performance bulk acquisition
             paginator = dynamo_client.get_paginator('scan')
             db_items = []
             for page in paginator.paginate(TableName=TABLE_NAME):
@@ -84,10 +90,7 @@ def get_cached_db_assets(folder_prefix, search_query=''):
             filtered_group = []
             for item in db_items:
                 s3_key = item.get('s3_key', {}).get('S', '')
-                # Case-insensitive folder segment check to ensure variations match properly
                 if s3_key.lower().startswith(folder_prefix.lower()):
-                    
-                    # --- HYBRID TIMESTAMP RESOLVER ---
                     raw_ts = (
                         item.get('created_at', {}).get('S') or 
                         item.get('created_at', {}).get('N') or 
@@ -96,7 +99,6 @@ def get_cached_db_assets(folder_prefix, search_query=''):
                         item.get('date', {}).get('S') or 
                         ''
                     )
-                    
                     version_val = item.get('bible_version', {}).get('S', '')
                     
                     filtered_group.append({
@@ -109,13 +111,11 @@ def get_cached_db_assets(folder_prefix, search_query=''):
                         'sort_value': raw_ts
                     })
             
-            # SORT LOGIC UPDATE: Evaluate by sort_value. Cascades gracefully to ID/S3 Key alphanumeric chains if dates are missing.
             filtered_group.sort(key=lambda x: (x['sort_value'], x['id'], x['s3_key']), reverse=True)
             image_cache[cache_key] = {'items': filtered_group, 'last_updated': current_time}
         except Exception as e:
             logger.error(f"Error executing synchronous cache compilation: {str(e)}")
             
-    # Apply search filter if search_query is present (includes bible_version now)
     base_items = image_cache[cache_key]['items']
     if search_query:
         query_lower = search_query.lower().strip()
@@ -131,11 +131,43 @@ def get_cached_db_assets(folder_prefix, search_query=''):
 
     return base_items
 
+def find_translation_alternatives(reference):
+    """
+    Scans language caches to find matching verse IDs and details for the same scriptural reference.
+    """
+    if not reference:
+        return {}
+    
+    clean_ref = reference.strip().lower()
+    translations = {}
+    
+    lang_map = {
+        'english': '',
+        'telugu': 'telugu',
+        'tamil': 'tamil'
+    }
+    
+    for lang_key, prefix in lang_map.items():
+        if not image_cache[lang_key]['items']:
+            get_cached_db_assets(prefix + ("/" if prefix else "english/"))
+            
+        for item in image_cache[lang_key]['items']:
+            if item.get('reference', '').strip().lower() == clean_ref:
+                # Cached items are normalized dictionaries containing strings,
+                # not raw DynamoDB attribute dictionaries such as {'S': 'NIV'}.
+                version_val = item.get('bible_version', '')
+                translations[lang_key] = {
+                    'id': item.get('id', ''),
+                    'url': f"{CLOUDFRONT_BASE}/{item.get('s3_key', '')}",
+                    'copyright': get_copyright_text(version_val, prefix + ("/" if prefix else "english/")),
+                    'reference': item.get('reference', ''),
+                    'verse_text': item.get('verse_text', '')
+                }
+                break
+                
+    return translations
+
 def get_single_db_asset(image_id, folder_prefix):
-    """
-    Executes a direct Key lookup and strictly verifies it belongs 
-    to the active language folder prefix.
-    """
     try:
         resp = dynamo_client.get_item(
             TableName=TABLE_NAME,
@@ -144,9 +176,7 @@ def get_single_db_asset(image_id, folder_prefix):
         item = resp.get('Item')
         if item:
             s3_key = item.get('s3_key', {}).get('S', '')
-            
             if not s3_key.lower().startswith(folder_prefix.lower()):
-                logger.warning(f"Asset {image_id} found but belongs to path {s3_key}, which doesn't match expected prefix {folder_prefix}")
                 return None
                
             version_val = item.get('bible_version', {}).get('S', '') 
@@ -164,6 +194,8 @@ def get_single_db_asset(image_id, folder_prefix):
 
 def lambda_handler(event, context):
     global image_cache
+
+    event = ensure_dict(event)
     
     if event.get('warmer'):
         logger.info("Warmer pulse processed.")
@@ -173,31 +205,23 @@ def lambda_handler(event, context):
         path = event.get('rawPath', event.get('path', '/'))
         clean_path = path.strip('/').lower()
         
-        # --- BACKGROUND ANALYTICS VIEW METRIC ROUTER ---
         if clean_path == "increment-view":
             try:
                 raw_body = event.get('body', '{}') or '{}'
                 if event.get('isBase64Encoded', False):
                     raw_body = base64.b64decode(raw_body).decode('utf-8')
                 
-                body = json.loads(raw_body)
+                body = ensure_dict(raw_body)
                 image_id = body.get('image_id')
                 
                 if image_id:
                     normalized_id = image_id.strip().lower()
-                    logger.info(f"Incrementing metrics view count for sanitized asset ID: {normalized_id}")
-                    
                     dynamo_client.update_item(
                         TableName=TABLE_NAME,
                         Key={'image_id': {'S': normalized_id}},
                         UpdateExpression="SET #v = if_not_exists(#v, :zero) + :inc",
-                        ExpressionAttributeNames={
-                            '#v': 'views'
-                        },
-                        ExpressionAttributeValues={
-                            ':zero': {'N': '0'},
-                            ':inc': {'N': '1'}
-                        }
+                        ExpressionAttributeNames={'#v': 'views'},
+                        ExpressionAttributeValues={':zero': {'N': '0'}, ':inc': {'N': '1'}}
                     )
                 return {
                     'statusCode': 200, 
@@ -213,14 +237,10 @@ def lambda_handler(event, context):
                 logger.error(f"Failed to record background view metric safely: {str(metric_err)}")
                 return {
                     'statusCode': 200,
-                    'headers': {
-                        'Content-Type': 'application/json',
-                        'Access-Control-Allow-Origin': '*'
-                    },
+                    'headers': {'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*'},
                     'body': json.dumps({'success': False, 'error': str(metric_err)})
                 }
 
-        # --- LANGUAGE ROUTER MATRIX ---
         if clean_path == "telugu":
             lang_mode = "telugu"
             folder_prefix = "telugu/"
@@ -231,18 +251,17 @@ def lambda_handler(event, context):
             lang_mode = "english"
             folder_prefix = "english/"
 
-        # --- DYNAMIC DOMAIN EXTRACTION ---
-        headers = event.get('headers', {}) or {}
+        headers = ensure_dict(event.get('headers'))
         domain = headers.get('host', 'verstantly.com') 
         base_url = f"https://{domain}"
 
-        # --- 302 STATIC REDIRECTS ---
         if clean_path in ["favicon.ico", "apple-touch-icon.png", "logo.png", "home-preview.jpg", "home-preview-telugu.jpg", "home-preview-tamil.jpg"]:
             return {'statusCode': 302, 'headers': {'Location': f"{S3_DIRECT_URL}/{clean_path}"}, 'body': ''}
 
-        query_params = event.get('queryStringParameters', {}) or {}
-        if query_params is None:
-            query_params = {}
+        raw_query_params = event.get('queryStringParameters')
+        query_params = ensure_dict(raw_query_params)
+        if not query_params and isinstance(raw_query_params, str):
+            query_params = {key: values[-1] for key, values in parse_qs(raw_query_params).items()}
 
         if query_params.get('refresh') == 'true':
             image_cache = {
@@ -251,16 +270,10 @@ def lambda_handler(event, context):
                 'tamil': {'items': [], 'last_updated': 0}
             }
 
-        # --- EXTRACT SEARCH QUERY PARAMETER (?q=) ---
         search_query = query_params.get('q', '').strip()
-
-        # Look up by explicit unique string id instead of mathematical array indexes
         url_id = query_params.get('id')
-        
-        # Track active target asset for structured data generation
         target_asset = None
         
-        # --- DYNAMIC SEO & META DEFINITIONS ---
         if not url_id:
             display_title = "Verse.Instantly.Constantly"
             display_desc = "Daily scriptural meditation and verses delivered instantly. Stay spiritually refreshed and connected to the Word, constantly."
@@ -278,30 +291,15 @@ def lambda_handler(event, context):
             target_asset = get_single_db_asset(url_id, folder_prefix)
             if target_asset:
                 social_img_path = f"{CLOUDFRONT_BASE}/{target_asset['s3_key']}?wspreview=1"
-                
-                if target_asset.get('reference') and target_asset['reference'].strip():
-                    display_title = target_asset['reference']
-                else:
-                    display_title = "Verse.Instantly.Constantly"
-                
-                if target_asset.get('verse_text') and target_asset['verse_text'].strip():
-                    display_desc = target_asset['verse_text']
-                else:
-                    display_desc = "Daily scriptural meditation and verses delivered instantly."
+                display_title = target_asset['reference'] if (target_asset.get('reference') and target_asset['reference'].strip()) else "Verse.Instantly.Constantly"
+                display_desc = target_asset['verse_text'] if (target_asset.get('verse_text') and target_asset['verse_text'].strip()) else "Daily scriptural meditation and verses delivered instantly."
             else:
                 display_title = "Verse.Instantly.Constantly"
                 display_desc = "Daily scriptural meditation and verses delivered instantly. Stay spiritually refreshed and connected to the Word, constantly."
-                if lang_mode == "telugu":
-                    social_img_path = f"{S3_DIRECT_URL}/home-preview-telugu.jpg?wspreview=1"
-                elif lang_mode == "tamil":
-                    social_img_path = f"{S3_DIRECT_URL}/home-preview-tamil.jpg?wspreview=1"
-                else:
-                    social_img_path = f"{S3_DIRECT_URL}/home-preview.jpg?wspreview=1"
+                social_img_path = f"{S3_DIRECT_URL}/home-preview.jpg?wspreview=1"
 
-        # HTML Framework Buildout
         h = f'<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">'
         
-        # --- JSON-LD STRUCTURED DATA SCHEMA INJECTION ---
         if target_asset:
             safe_name = target_asset.get('reference', 'Verse').replace('"', '&quot;')
             safe_caption = target_asset.get('verse_text', 'Daily verse').replace('"', '&quot;')
@@ -309,7 +307,6 @@ def lambda_handler(event, context):
             h += f'{{"@context":"https://schema.org/","@type":"ImageObject","contentUrl":"{CLOUDFRONT_BASE}/{target_asset["s3_key"]}","name":"{safe_name}","caption":"{safe_caption}"}}'
             h += f'</script>'
 
-        # OPEN GRAPH TAGS
         path_suffix = f"{clean_path}" if clean_path in ["telugu", "tamil"] else ""
         h += f'<meta property="og:title" content="{display_title}">'
         h += f'<meta property="og:image" content="{social_img_path}">'
@@ -326,18 +323,24 @@ def lambda_handler(event, context):
         # CSS STYLING
         h += '<style>'
         h += 'body { display: flex; flex-direction: column; align-items: center; min-height: 100vh; margin: 0; background: #0f172a; font-family: "Inter", sans-serif; color: white; padding-bottom: 60px; box-sizing: border-box; -webkit-user-select: none; user-select: none; }'
-        h += '.header-container { display: flex; flex-direction: column; align-items: center; width: 100%; max-width: 935px; padding: 60px 20px 30px 20px; box-sizing: border-box; text-align: center; }'
-        h += '.profile-logo-wrapper { width: 100px; height: 100px; border-radius: 50%; padding: 4px; background: linear-gradient(135deg, #38bdf8, #1e40af); box-shadow: 0 8px 24px rgba(0,0,0,0.3); margin-bottom: 24px; display: flex; align-items: center; justify-content: center; }'
+        h += '.header-container { display: flex; flex-direction: column; align-items: center; width: 100%; max-width: 935px; padding: 40px 20px 30px 20px; box-sizing: border-box; text-align: center; }'
+        h += '.profile-logo-wrapper { width: 90px; height: 90px; border-radius: 50%; padding: 4px; background: linear-gradient(135deg, #38bdf8, #1e40af); box-shadow: 0 8px 24px rgba(0,0,0,0.3); margin-bottom: 20px; display: flex; align-items: center; justify-content: center; }'
         h += '.profile-logo { width: 100%; height: 100%; background: #0f172a; border-radius: 50%; display: flex; align-items: center; justify-content: center; overflow: hidden; }'
-        h += '.profile-logo img { width: 65px; height: 65px; object-fit: contain; }'
+        h += '.profile-logo img { width: 58px; height: 58px; object-fit: contain; }'
         
-        # Search Bar Styling
-        h += '.search-bar-wrapper { width: 100%; max-width: 420px; margin-top: 20px; margin-bottom: 10px; display: flex; position: relative; }'
+        # HEADER LANGUAGE SELECTOR PILLS
+        h += '.header-lang-selector { position: fixed; top: max(20px, env(safe-area-inset-top)); right: max(20px, env(safe-area-inset-right)); z-index: 100; display: flex; gap: 6px; background: rgba(30, 41, 59, 0.88); border: 1px solid rgba(255, 255, 255, 0.1); border-radius: 24px; padding: 4px; backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px); box-shadow: 0 4px 12px rgba(0,0,0,0.2); }'
+        h += '.header-lang-segment { display: inline-flex; align-items: center; justify-content: center; padding: 6px 16px; border-radius: 20px; font-size: 12px; font-weight: 700; color: #94a3b8; text-decoration: none; transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1); letter-spacing: 0.05em; }'
+        h += '.header-lang-segment:hover { color: #e2e8f0; background: rgba(255,255,255,0.05); }'
+        h += '.header-lang-segment.active { background: #38bdf8; color: #0f172a; box-shadow: 0 2px 8px rgba(56,189,248,0.4); }'
+        h += '.lang-te { font-family: "Noto Sans Telugu", sans-serif; font-size: 13px; }'
+        h += '.lang-ta { font-family: "Noto Sans Tamil", sans-serif; font-size: 13px; }'
+
+        h += '.search-bar-wrapper { width: 100%; max-width: 420px; margin-top: 6px; margin-bottom: 10px; display: flex; position: relative; }'
         h += '.search-input { width: 100%; padding: 12px 18px 12px 42px; border-radius: 24px; border: 1px solid rgba(255,255,255,0.15); background: rgba(255,255,255,0.06); color: white; outline: none; font-size: 14px; transition: all 0.3s ease; backdrop-filter: blur(8px); }'
         h += '.search-input:focus { border-color: #38bdf8; background: rgba(255,255,255,0.1); box-shadow: 0 0 15px rgba(56,189,248,0.2); }'
         h += '.search-icon { position: absolute; left: 14px; top: 50%; transform: translateY(-50%); color: #94a3b8; pointer-events: none; }'
         
-        # Language-Specific Header Styling
         if lang_mode == "telugu":
             h += '.banner-text { font-family: "Noto Sans Telugu", "Inter", sans-serif; font-size: 20px; font-weight: 400; line-height: 1.8; color: #e2e8f0; max-width: 650px; margin: 0 0 16px 0; letter-spacing: 0.02em; }'
             h += '.banner-reference { font-family: "Noto Sans Telugu", "Inter", sans-serif; font-size: 14px; font-weight: 700; color: #38bdf8; margin: 0; }'
@@ -354,23 +357,29 @@ def lambda_handler(event, context):
         h += '.grid-item:hover { transform: scale(1.02); border-color: rgba(56, 189, 248, 0.5); box-shadow: 0 12px 24px rgba(0,0,0,0.3); }'
         h += '.grid-item img { position: absolute; top: 0; left: 0; width: 100%; height: 100%; object-fit: cover; -webkit-user-drag: none; -webkit-touch-callout: none; }'
         
-        # LIGHTBOX MODAL & INTERACTION SHIELDS
+        # LIGHTBOX & TRANSLATION PILLS STYLING
         h += '.lightbox { display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(15, 23, 42, 0.95); backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px); z-index: 200; align-items: center; justify-content: center; opacity: 0; transition: opacity 0.3s ease; touch-action: none; }'
         h += '.lightbox.show { display: flex; opacity: 1; }'
         h += '.lightbox-content { position: relative; max-width: 90vw; max-height: 85vh; display: flex; flex-direction: column; align-items: center; transition: transform 0.2s ease; }'
         h += '.img-frame { position: relative; display: inline-flex; max-width: 100%; max-height: 60vh; }'
-        h += '.lightbox-img { max-width: 100%; max-height: 60vh; border-radius: 16px; box-shadow: 0 25px 50px -12px rgba(0,0,0,0.5); border: 1px solid rgba(255,255,255,0.1); object-fit: contain; user-select: none; -webkit-user-select: none; -webkit-user-drag: none; -webkit-touch-callout: none; }'
+        h += '.lightbox-img { max-width: 100%; max-height: 60vh; border-radius: 16px; box-shadow: 0 25px 50px -12px rgba(0,0,0,0.5); border: 1px solid rgba(255,255,255,0.1); object-fit: contain; user-select: none; -webkit-user-select: none; -webkit-user-drag: none; -webkit-touch-callout: none; transition: opacity 0.15s ease; }'
         h += '.protection-shield { position: absolute; top: 0; left: 0; width: 100%; height: 100%; z-index: 202; background: transparent; -webkit-touch-callout: none; }'
         h += '.watermark-overlay { position: absolute; bottom: 16px; left: 50%; transform: translateX(-50%); width: 45px; height: 45px; opacity: 0.65; pointer-events: none; z-index: 205; filter: drop-shadow(0px 2px 4px rgba(0,0,0,0.5)); }'
         h += '.watermark-overlay img { width: 100%; height: 100%; object-fit: contain; }'
         
-        # LIGHTBOX COPYRIGHT FOOTER STYLING
         h += '.lightbox-copyright { font-size: 10px; color: #94a3b8; text-align: center; max-width: 500px; margin-top: 12px; line-height: 1.4; padding: 0 10px; word-break: break-word; }'
         
-        h += '.lightbox-actions { display: flex; gap: 24px; margin-top: 18px; z-index: 210; background: rgba(30, 41, 59, 0.6); padding: 8px 24px; border-radius: 30px; border: 1px solid rgba(255,255,255,0.08); backdrop-filter: blur(8px); }'
-        h += '.lightbox-btn { width: 44px; height: 44px; display: flex; justify-content: center; align-items: center; cursor: pointer; transition: 0.25s; color: #94a3b8; }'
+        h += '.lightbox-actions { display: flex; gap: 16px; align-items: center; margin-top: 18px; z-index: 210; background: rgba(30, 41, 59, 0.6); padding: 8px 18px; border-radius: 30px; border: 1px solid rgba(255,255,255,0.08); backdrop-filter: blur(8px); }'
+        h += '.lightbox-btn { width: 38px; height: 38px; display: flex; justify-content: center; align-items: center; cursor: pointer; transition: 0.25s; color: #94a3b8; }'
         h += '.lightbox-btn:hover { transform: scale(1.1); color: #38bdf8; }'
         h += '.lightbox-btn.close-btn:hover { color: #f43f5e; }'
+        
+        # LIGHTBOX LANGUAGE SWITCHER PILLS
+        h += '.lightbox-lang-switcher { display: none; align-self: center; flex: 0 0 auto; z-index: 210; gap: 4px; align-items: center; margin: 0 0 10px 0; padding: 5px; border-radius: 18px; background: rgba(15, 23, 42, 0.88); border: 1px solid rgba(255,255,255,0.14); box-shadow: 0 4px 14px rgba(0,0,0,0.35); backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px); touch-action: manipulation; }'
+        h += '.lb-lang-pill { padding: 4px 8px; border-radius: 12px; font-size: 11px; font-weight: 700; color: #94a3b8; background: rgba(255,255,255,0.05); text-decoration: none; border: 1px solid rgba(255,255,255,0.1); transition: all 0.2s; cursor: pointer; }'
+        h += '.lb-lang-pill:hover { background: #38bdf8; color: #0f172a; border-color: #38bdf8; }'
+        h += '.lb-lang-pill.active { background: #38bdf8; color: #0f172a; border-color: #38bdf8; }'
+        h += '.lb-lang-pill.disabled { opacity: 0.2; pointer-events: none; border-color: transparent; background: transparent; }'
         
         h += '.icon-btn { position: fixed; top: 20px; background: rgba(255,255,255,0.1); padding: 10px; border-radius: 50%; border: 1px solid rgba(255,255,255,0.2); cursor: pointer; color: white; transition: 0.3s; z-index: 100; display: flex; align-items: center; justify-content: center; }'
         h += '.bell-btn { left: 20px; }'
@@ -378,23 +387,8 @@ def lambda_handler(event, context):
         h += '.modal input { background: rgba(255,255,255,0.1); border: 1px solid rgba(255,255,255,0.2); color: white; padding: 12px; border-radius: 10px; width: 100%; box-sizing: border-box; margin-bottom: 12px; outline: none; font-size: 16px; }'
         h += '.modal button { background: #38bdf8; color: #0f172a; border: none; padding: 12px; width: 100%; border-radius: 10px; font-weight: bold; cursor: pointer; font-size: 16px; }'
         
-        # SEGMENTED PILL SELECTOR
-        h += '.lang-pill-selector { position: fixed; top: 20px; right: 20px; display: flex; background: rgba(30, 41, 59, 0.7); border: 1px solid rgba(255, 255, 255, 0.08); border-radius: 20px; padding: 3px; backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px); z-index: 100; }'
-        h += '.lang-segment { display: inline-flex; align-items: center; justify-content: center; padding: 6px 14px; border-radius: 16px; font-size: 12px; font-weight: 700; color: #94a3b8; text-decoration: none; transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1); letter-spacing: 0.05em; }'
-        h += '.lang-segment:hover { color: #e2e8f0; }'
-        h += '.lang-segment.active { background: #38bdf8; color: #0f172a; }'
-        h += '.lang-te { font-family: "Noto Sans Telugu", "Segoe UI East Europe", "Malgun Gothic", sans-serif; font-size: 13px; }'
-        h += '.lang-ta { font-family: "Noto Sans Tamil", "Segoe UI East Europe", "Malgun Gothic", sans-serif; font-size: 13px; }'
-        
-        h += '@media (max-width: 768px) { .header-container { padding: 50px 16px 24px 16px; } .profile-logo-wrapper { width: 80px; height: 80px; margin-bottom: 16px; } .profile-logo img { width: 50px; height: 50px; } .banner-text { font-size: 16px; } .gallery-grid { gap: 4px; padding: 0 4px; } .grid-item { border-radius: 4px; } .divider { margin-bottom: 16px; } .lightbox-content { max-width: 95vw; } .lightbox-actions { gap: 16px; padding: 6px 16px; } .watermark-overlay { bottom: 12px; width: 32px; height: 32px; } .lang-pill-selector { top: 16px; right: 16px; } .lang-segment { padding: 5px 10px; font-size: 11px; } .lang-te, .lang-ta { font-size: 11px; } }'
+        h += '@media (max-width: 768px) { .header-container { padding: 40px 16px 20px 16px; } .profile-logo-wrapper { width: 75px; height: 75px; margin-bottom: 14px; } .profile-logo img { width: 48px; height: 48px; } .banner-text { font-size: 16px; } .gallery-grid { gap: 4px; padding: 0 4px; } .grid-item { border-radius: 4px; } .divider { margin-bottom: 16px; } .lightbox-content { max-width: 95vw; } .lightbox-actions { gap: 8px; padding: 6px 12px; } .lightbox-btn { width: 32px; height: 32px; } .lightbox-lang-switcher { gap: 2px; margin-bottom: 8px; padding: 4px; } .lb-lang-pill { padding: 4px 6px; font-size: 10px; } .watermark-overlay { bottom: 12px; width: 32px; height: 32px; } .header-lang-selector { top: max(12px, env(safe-area-inset-top)); right: max(12px, env(safe-area-inset-right)); gap: 2px; } .header-lang-segment { padding: 5px 9px; font-size: 10px; } }'
         h += '</style></head><body>'
-        
-        # LANGUAGE PILLS
-        h += '<div class="lang-pill-selector">'
-        h += f'  <a href="/" class="lang-segment {"active" if lang_mode == "english" else ""}">EN</a>'
-        h += f'  <a href="/telugu" class="lang-segment lang-te {"active" if lang_mode == "telugu" else ""}">తెలుగు</a>'
-        h += f'  <a href="/tamil" class="lang-segment lang-ta {"active" if lang_mode == "tamil" else ""}">தமிழ்</a>'
-        h += '</div>'
         
         h += '<div class="icon-btn bell-btn" onclick="toggleM(event)"><svg width="20" height="20" fill="currentColor" viewBox="0 0 24 24"><path d="M12 22c1.1 0 2-.9 2-2h-4c0 1.1.89 2 2 2zm6-6v-5c0-3.07-1.64-5.64-4.5-6.32V4c0-.83-.67-1.5-1.5-1.5s-1.5 1.5-1.5 1.5v.68C7.63 5.36 6 7.92 6 11v5l-2 2v1h16v-1l-2-2z"/></svg></div>'
         h += '<div id="subM" class="modal" onclick="event.stopPropagation()"><p style="margin:0 0 10px 0; font-size:14px; color:#cbd5e1;">Receive daily verses:</p><input type="email" id="uE" placeholder="Enter email"><button id="sBtn" onclick="sub()">Be Refreshed</button></div>'
@@ -404,7 +398,13 @@ def lambda_handler(event, context):
         h += '    <div class="profile-logo"><img src="/logo.png" alt="Logo"></div>'
         h += '  </div>'
         
-        # Localized Banner Mapping
+        # Header Language Switcher Pills
+        h += '  <div class="header-lang-selector">'
+        h += f'    <a href="/" class="header-lang-segment {"active" if lang_mode == "english" else ""}">EN</a>'
+        h += f'    <a href="/telugu" class="header-lang-segment lang-te {"active" if lang_mode == "telugu" else ""}">తెలుగు</a>'
+        h += f'    <a href="/tamil" class="header-lang-segment lang-ta {"active" if lang_mode == "tamil" else ""}">தமிழ்</a>'
+        h += '  </div>'
+        
         if lang_mode == "telugu":
             h += '  <p class="banner-text">"దేవుని మాటలన్నియు పుటము పెట్టబడినవే ఆయనను ఆశ్రయించువారికి ఆయన కేడెము."</p>'
             h += '  <p class="banner-reference">సామెతలు 30:5</p>'
@@ -415,7 +415,6 @@ def lambda_handler(event, context):
             h += '  <p class="banner-text">"Every word of God is pure; He is a shield to those who put their trust in Him."</p>'
             h += '  <p class="banner-reference">Proverbs 30:5</p>'
             
-        # SEARCH INPUT FIELD COMPONENT
         h += '  <div class="search-bar-wrapper">'
         h += '    <span class="search-icon"><svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/></svg></span>'
         h += f'    <input type="text" id="searchInput" class="search-input" value="{search_query}" placeholder="Search verses or references..." onkeypress="handleSearch(event)">'
@@ -424,15 +423,19 @@ def lambda_handler(event, context):
         h += '</div>'
         h += '<div class="divider"></div>'
         
-        # RENDERING GALLERY TILES
         h += '<div class="gallery-grid">'
         client_js_array = []
         for idx, img in enumerate(images):
             full_cf_url = f"{CLOUDFRONT_BASE}/{img['s3_key']}"
+            
+            # Find matching language alternatives using the reference field
+            translations = find_translation_alternatives(img.get('reference', ''))
+            
             client_js_array.append({
                 'id': img['id'], 
                 'url': full_cf_url,
-                'copyright': img.get('copyright', '')
+                'copyright': img.get('copyright', ''),
+                'translations': translations
             })
             
             h += f'<div class="grid-item" id="tile-{img["id"]}" onclick="openLightbox({idx})">'
@@ -440,9 +443,14 @@ def lambda_handler(event, context):
             h += '</div>'
         h += '</div>'
         
-        # LIGHTBOX INJECTION LAYOUT
         h += '<div id="lightbox" class="lightbox" onclick="closeLightbox()">'
         h += '  <div id="lbContent" class="lightbox-content" onclick="event.stopPropagation()">'
+        # Keep the switcher outside the image's swipe/touch surface.
+        h += '    <div id="lightboxLangSwitcher" class="lightbox-lang-switcher" ontouchstart="event.stopPropagation()" ontouchmove="event.stopPropagation()" ontouchend="event.stopPropagation()">'
+        h += '      <span id="lnkEn" onclick="switchLanguageAlt(\'english\')" class="lb-lang-pill">EN</span>'
+        h += '      <span id="lnkTe" onclick="switchLanguageAlt(\'telugu\')" class="lb-lang-pill lang-te">తెలుగు</span>'
+        h += '      <span id="lnkTa" onclick="switchLanguageAlt(\'tamil\')" class="lb-lang-pill lang-ta">தமிழ்</span>'
+        h += '    </div>'
         h += '    <div class="img-frame">'
         h += '      <img id="lightbox-img" class="lightbox-img" src="" alt="Expanded Verse">'
         h += '      <div class="protection-shield"></div>'
@@ -451,62 +459,123 @@ def lambda_handler(event, context):
         h += '    <div id="lightbox-copyright" class="lightbox-copyright"></div>'
         h += '    <div class="lightbox-actions">'
         h += '      <div class="lightbox-btn" onclick="prevAsset()" title="Previous Image">'
-        h += '        <svg width="24" height="24" fill="currentColor" viewBox="0 0 24 24"><path d="M15.41 7.41L14 6l-6 6 6 6 1.41-1.41L10.83 12z"/></svg>'
+        h += '        <svg width="20" height="20" fill="currentColor" viewBox="0 0 24 24"><path d="M15.41 7.41L14 6l-6 6 6 6 1.41-1.41L10.83 12z"/></svg>'
         h += '      </div>'
-        h += '      <div class="lightbox-btn close-btn" onclick="closeLightbox()" title="Close">'
-        h += '        <svg width="24" height="24" fill="currentColor" viewBox="0 0 24 24"><path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>'
-        h += '      </div>'
+        
         h += '      <div class="lightbox-btn" onclick="shareCurrentAsset()" title="Share Link">'
-        h += '        <svg width="24" height="24" fill="currentColor" viewBox="0 0 24 24"><path d="M18 16.08c-.76 0-1.44.3-1.96.77L8.91 12.7c.05-.23.09-.46.09-.7s-.04-.47-.09-.7l7.05-4.11c.54.5 1.25.81 2.04.81 1.66 0 3-1.34 3-3s-1.34-3-3-3-3 1.34-3 3c0 .24.04.47.09.7L8.04 9.81C7.5 9.31 6.79 9 6 9c-1.66 0-3 1.34-3 3s1.34 3 3 3c.79 0 1.5-.31 2.04-.81l7.12 4.16c-.05.21-.08.43-.08.65 0 1.61 1.31 2.92 2.92 2.92s2.92-1.31 2.92-2.92c0-1.61-1.31-2.92-2.92-2.92z"/></svg>'
+        h += '        <svg width="20" height="20" fill="currentColor" viewBox="0 0 24 24"><path d="M18 16.08c-.76 0-1.44.3-1.96.77L8.91 12.7c.05-.23.09-.46.09-.7s-.04-.47-.09-.7l7.05-4.11c.54.5 1.25.81 2.04.81 1.66 0 3-1.34 3-3s-1.34-3-3-3-3 1.34-3 3c0 .24.04.47.09.7L8.04 9.81C7.5 9.31 6.79 9 6 9c-1.66 0-3 1.34-3 3s1.34 3 3 3c.79 0 1.5-.31 2.04-.81l7.12 4.16c-.05.21-.08.43-.08.65 0 1.61 1.31 2.92 2.92 2.92s2.92-1.31 2.92-2.92c0-1.61-1.31-2.92-2.92-2.92z"/></svg>'
         h += '      </div>'
         h += '      <div class="lightbox-btn" onclick="nextAsset()" title="Next Image">'
-        h += '        <svg width="24" height="24" fill="currentColor" viewBox="0 0 24 24"><path d="M10 6L8.59 7.41 13.17 12l-4.58 4.59L10 18l6-6z"/></svg>'
+        h += '        <svg width="20" height="20" fill="currentColor" viewBox="0 0 24 24"><path d="M10 6L8.59 7.41 13.17 12l-4.58 4.59L10 18l6-6z"/></svg>'
+        h += '      </div>'
+        h += '      <div class="lightbox-btn close-btn" onclick="closeLightbox()" title="Close">'
+        h += '        <svg width="20" height="20" fill="currentColor" viewBox="0 0 24 24"><path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>'
         h += '      </div>'
         h += '    </div>'
         h += '  </div>'
         h += '</div>'
         
-        # FRONTEND ROUTER SCRIPTS + SEARCH HANDLER
         h += ' <script>const m=document.getElementById("subM"), lb=document.getElementById("lightbox"), lbImg=document.getElementById("lightbox-img"), lbContent=document.getElementById("lbContent");'
         h += f'const metadataVault = {json.dumps(client_js_array)};'
         h += 'let activeIdx = null;'
+        h += 'let activeAssetId = null;'
+        h += f'let activeLanguage = "{lang_mode}";'
         h += 'let startY = 0, currentY = 0, isDragging = false;'
         
         h += 'function toggleM(e){ e.stopPropagation(); m.style.display=(m.style.display==="block")?"none":"block"; }'
         h += 'function closeM(){ m.style.display="none"; }'
         h += 'async function sub(){ const e=document.getElementById("uE"),b=document.getElementById("sBtn"); if(!e.value.includes("@"))return alert("Valid email please!"); b.disabled=true; b.innerText="..."; try{ await fetch("' + SUBSCRIBER_URL + '",{method:"POST",mode:"no-cors",body:JSON.stringify({email:e.value.trim()})}); alert("Subscribed! Be Refreshed."); e.value=""; closeM(); }catch(err){ alert("Subscribed!"); closeM(); } b.disabled=false; b.innerText="Be Refreshed"; }'
         
-        # SEARCH SUBMISSION HANDLER
         h += 'function handleSearch(e) {'
         h += '  if (e.key === "Enter") {'
         h += '    const query = e.target.value.trim();'
         h += '    const urlObj = new URL(window.location.href);'
-        h += '    if (query) {'
-        h += '      urlObj.searchParams.set("q", query);'
-        h += '    } else {'
-        h += '      urlObj.searchParams.delete("q");'
-        h += '    }'
+        h += '    if (query) { urlObj.searchParams.set("q", query); } else { urlObj.searchParams.delete("q"); }'
         h += '    window.location.href = urlObj.toString();'
         h += '  }'
         h += '}'
         
-        # BACKGROUND FETCH TO TRACK ALBUM VIEWS & POPULATE COPYRIGHT
+        # INSTANT CLIENT-SIDE LIGHTBOX LANGUAGE SWITCH (NO PAGE FLICKERING/RELOAD)
+        h += 'function switchLanguageAlt(langKey) {'
+        h += '  if (activeIdx === null) return;'
+        h += '  const asset = metadataVault[activeIdx];'
+        h += '  const trans = asset.translations || {};'
+        h += '  const target = trans[langKey];'
+        h += '  if (!target) return;'
+        h += '  activeAssetId = target.id;'
+        h += '  activeLanguage = langKey;'
+        
+        # Preload image and update DOM elements inside the modal seamlessly
+        h += '  const imgLoader = new Image();'
+        h += '  imgLoader.src = target.url;'
+        h += '  imgLoader.onload = () => {'
+        h += '    lbImg.style.opacity = "0.3";'
+        h += '    setTimeout(() => {'
+        h += '      lbImg.src = target.url;'
+        h += '      document.getElementById("lightbox-copyright").innerText = target.copyright || "";'
+        h += '      lbImg.style.opacity = "1";'
+        h += '    }, 100);'
+        h += '  };'
+        
+        # Update active pill states and browser URL gracefully
+        h += '  document.getElementById("lnkEn").className = "lb-lang-pill" + (langKey === "english" ? " active" : "");'
+        h += '  document.getElementById("lnkTe").className = "lb-lang-pill lang-te" + (langKey === "telugu" ? " active" : "");'
+        h += '  document.getElementById("lnkTa").className = "lb-lang-pill lang-ta" + (langKey === "tamil" ? " active" : "");'
+        
+        h += '  const urlObj = new URL(window.location.href);'
+        h += '  urlObj.pathname = langKey === "english" ? "/" : "/" + langKey;'
+        h += '  urlObj.searchParams.set("id", target.id);'
+        h += '  window.history.replaceState({path:urlObj.toString()}, "", urlObj.toString());'
+        
+        h += '  fetch("/increment-view", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ image_id: target.id }) }).catch(() => {});'
+        h += '}'
+        
+        # LIGHTBOX OPEN WITH DYNAMIC TRANSLATION PILLS TOGGLE
         h += 'function openLightbox(index) {'
         h += '  activeIdx = index;'
-        h += '  lbImg.src = metadataVault[index].url;'
-        h += '  document.getElementById("lightbox-copyright").innerText = metadataVault[index].copyright || "";'
+        h += '  const asset = metadataVault[index];'
+        h += '  activeAssetId = asset.id;'
+        h += f'  activeLanguage = "{lang_mode}";'
+        h += '  lbImg.src = asset.url;'
+        h += '  document.getElementById("lightbox-copyright").innerText = asset.copyright || "";'
         h += '  lb.classList.add("show");'
         h += '  lbContent.style.transform = "translateY(0)";'
-        h += '  const targetId = metadataVault[index].id;'
+        
+        h += '  const targetId = asset.id;'
         h += '  const urlObj = new URL(window.location.href);'
         h += '  urlObj.searchParams.set("id", targetId);'
         h += '  window.history.replaceState({path:urlObj.toString()}, "", urlObj.toString());'
+        
+        # Manage language switcher UI elements inside lightbox
+        h += '  const switcher = document.getElementById("lightboxLangSwitcher");'
+        h += '  const lnkEn = document.getElementById("lnkEn");'
+        h += '  const lnkTe = document.getElementById("lnkTe");'
+        h += '  const lnkTa = document.getElementById("lnkTa");'
+        h += '  const trans = asset.translations || {};'
+        
+        h += '  switcher.style.display = "flex";'
+        
+        # Determine current active language based on which translation matches the active asset or the page mode
+        h += '  const currentLang = (' + ('"' + lang_mode + '" === "telugu"') + ' && trans.telugu && trans.telugu.id === targetId) ? "telugu" : (' + ('"' + lang_mode + '" === "tamil"') + ' && trans.tamil && trans.tamil.id === targetId) ? "tamil" : (!trans.telugu && !trans.tamil) ? "english" : "english";'
+        
+        # Alternatively, check against whichever language version matches the item's prefix/id
+        h += '  if (trans.english) { lnkEn.className = "lb-lang-pill" + (trans.english.id === targetId ? " active" : ""); }'
+        h += '  else { lnkEn.className = "lb-lang-pill disabled"; }'
+        
+        h += '  if (trans.telugu) { lnkTe.className = "lb-lang-pill lang-te" + (trans.telugu.id === targetId ? " active" : ""); }'
+        h += '  else { lnkTe.className = "lb-lang-pill lang-te disabled"; }'
+        
+        h += '  if (trans.tamil) { lnkTa.className = "lb-lang-pill lang-ta" + (trans.tamil.id === targetId ? " active" : ""); }'
+        h += '  else { lnkTa.className = "lb-lang-pill lang-ta disabled"; }'
+        
         h += '  fetch("/increment-view", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ image_id: targetId }) }).catch(() => {});'
         h += '}'
         
         h += 'function closeLightbox() {'
         h += '  lb.classList.remove("show");'
         h += '  activeIdx = null;'
+        h += '  activeAssetId = null;'
+        h += f'  activeLanguage = "{lang_mode}";'
         h += '  const urlObj = new URL(window.location.href);'
         h += '  urlObj.searchParams.delete("id");'
         h += '  window.history.replaceState({path:urlObj.toString()}, "", urlObj.toString());'
@@ -525,9 +594,10 @@ def lambda_handler(event, context):
         h += '}'
         
         h += 'function shareCurrentAsset(){'
-        h += '  if(activeIdx === null) return;'
+        h += '  if(activeIdx === null || !activeAssetId) return;'
         h += '  const urlObj = new URL(window.location.href);'
-        h += '  urlObj.searchParams.set("id", metadataVault[activeIdx].id);'
+        h += '  urlObj.pathname = activeLanguage === "english" ? "/" : "/" + activeLanguage;'
+        h += '  urlObj.searchParams.set("id", activeAssetId);'
         h += '  const shareUrl = urlObj.toString();'
         h += '  if(navigator.share){'
         h += '    navigator.share({title: document.title, url: shareUrl});'
@@ -545,7 +615,6 @@ def lambda_handler(event, context):
         document_event_listeners += '});'
         h += document_event_listeners
         
-        # TOUCH LAYER GESTURES
         h += 'let startX = 0, currentX = 0;'
         h += 'lb.addEventListener("touchstart", e => { startY = e.touches[0].clientY; startX = e.touches[0].clientX; isDragging = true; }, {passive: true});'
         h += 'lb.addEventListener("touchmove", e => {'
@@ -568,7 +637,6 @@ def lambda_handler(event, context):
         
         h += 'document.addEventListener("contextmenu", e => e.preventDefault());'
         
-        # DEEP-LINK INITIALIZATION RESOLVER
         h += f'const initialUrlId = "{url_id if url_id else ""}";'
         h += 'window.onload = () => {'
         h += '  if (initialUrlId) {'
