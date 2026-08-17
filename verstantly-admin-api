@@ -7,7 +7,86 @@ const dynamo = new DynamoDBClient({});
 const sns = new SNSClient({});
 
 const TABLE_NAME = "verstantly-verse-images";
+const VIEW_STATS_TABLE = "verstantly-view-stats";
 const BUCKET_NAME = "ajaybetham-sta";
+
+const getNewYorkDate = () => {
+    const parts = new Intl.DateTimeFormat("en-US", {
+        timeZone: "America/New_York",
+        year: "numeric",
+        month: "2-digit",
+        day: "2-digit"
+    }).formatToParts(new Date());
+    const values = Object.fromEntries(parts.map(part => [part.type, part.value]));
+    return `${values.year}-${values.month}-${values.day}`;
+};
+
+const shiftDate = (dateString, days) => {
+    const date = new Date(`${dateString}T12:00:00Z`);
+    date.setUTCDate(date.getUTCDate() + days);
+    return date.toISOString().slice(0, 10);
+};
+
+const daysBetween = (earlierDate, laterDate) => Math.floor(
+    (Date.parse(`${laterDate}T12:00:00Z`) - Date.parse(`${earlierDate}T12:00:00Z`)) / 86400000
+);
+
+const getIsoWeek = (dateString) => {
+    const date = new Date(`${dateString}T12:00:00Z`);
+    const day = date.getUTCDay() || 7;
+    date.setUTCDate(date.getUTCDate() + 4 - day);
+    const yearStart = new Date(Date.UTC(date.getUTCFullYear(), 0, 1));
+    const week = Math.ceil((((date - yearStart) / 86400000) + 1) / 7);
+    return `${date.getUTCFullYear()}-W${String(week).padStart(2, "0")}`;
+};
+
+const scanAllItems = async (tableName) => {
+    const items = [];
+    let lastEvaluatedKey;
+    do {
+        const response = await dynamo.send(new ScanCommand({
+            TableName: tableName,
+            ...(lastEvaluatedKey ? { ExclusiveStartKey: lastEvaluatedKey } : {})
+        }));
+        items.push(...(response.Items || []));
+        lastEvaluatedKey = response.LastEvaluatedKey;
+    } while (lastEvaluatedKey);
+    return items;
+};
+
+const buildAnalyticsSeries = (items, period, today) => {
+    const buckets = new Map();
+
+    if (period === "daily") {
+        for (let offset = 29; offset >= 0; offset--) buckets.set(shiftDate(today, -offset), 0);
+    } else if (period === "weekly") {
+        for (let offset = 11; offset >= 0; offset--) buckets.set(getIsoWeek(shiftDate(today, -(offset * 7))), 0);
+    } else if (period === "monthly") {
+        const current = new Date(`${today}T12:00:00Z`);
+        for (let offset = 11; offset >= 0; offset--) {
+            const date = new Date(Date.UTC(current.getUTCFullYear(), current.getUTCMonth() - offset, 1));
+            buckets.set(date.toISOString().slice(0, 7), 0);
+        }
+    } else {
+        const years = items.map(item => item.view_date?.S?.slice(0, 4)).filter(Boolean);
+        const currentYear = Number(today.slice(0, 4));
+        const firstYear = years.length ? Math.min(...years.map(Number)) : currentYear;
+        for (let year = firstYear; year <= currentYear; year++) buckets.set(String(year), 0);
+    }
+
+    items.forEach(item => {
+        const date = item.view_date?.S;
+        const views = Number(item.daily_views?.N || 0);
+        if (!date || !Number.isFinite(views)) return;
+        let key = date;
+        if (period === "weekly") key = getIsoWeek(date);
+        else if (period === "monthly") key = date.slice(0, 7);
+        else if (period === "yearly") key = date.slice(0, 4);
+        if (buckets.has(key)) buckets.set(key, buckets.get(key) + views);
+    });
+
+    return Array.from(buckets, ([bucket, views]) => ({ bucket, views }));
+};
 
 export const handler = async (event, context) => {
     // Prevent Lambda from hanging for open event loop network connections
@@ -41,6 +120,71 @@ export const handler = async (event, context) => {
 
     try {
         // ==========================================
+        // ROUTE: VIEW ANALYTICS
+        // ==========================================
+        if (httpMethod === "GET" && path.includes("/analytics/views")) {
+            const requestedPeriod = (event.queryStringParameters?.period || "daily").toLowerCase();
+            const period = ["daily", "weekly", "monthly", "yearly"].includes(requestedPeriod)
+                ? requestedPeriod
+                : "daily";
+            const today = getNewYorkDate();
+            const items = await scanAllItems(VIEW_STATS_TABLE);
+
+            const summary = {
+                views_today: 0,
+                last_7_days: 0,
+                last_30_days: 0,
+                tracked_views: 0,
+                active_images: new Set(),
+                first_tracked_date: null,
+                last_tracked_date: null
+            };
+            const byLanguage = { english: 0, telugu: 0, tamil: 0, hindi: 0 };
+            const imageLastViewed = {};
+
+            items.forEach(item => {
+                const date = item.view_date?.S;
+                const views = Number(item.daily_views?.N || 0);
+                if (!date || !Number.isFinite(views)) return;
+
+                const age = daysBetween(date, today);
+                summary.tracked_views += views;
+                if (age === 0) summary.views_today += views;
+                if (age >= 0 && age < 7) summary.last_7_days += views;
+                if (age >= 0 && age < 30) summary.last_30_days += views;
+                if (item.image_id?.S) summary.active_images.add(item.image_id.S);
+                const imageId = item.image_id?.S;
+                const lastViewedAt = item.last_viewed_at?.S;
+                if (imageId && lastViewedAt && (!imageLastViewed[imageId] || lastViewedAt > imageLastViewed[imageId])) {
+                    imageLastViewed[imageId] = lastViewedAt;
+                }
+                if (!summary.first_tracked_date || date < summary.first_tracked_date) summary.first_tracked_date = date;
+                if (!summary.last_tracked_date || date > summary.last_tracked_date) summary.last_tracked_date = date;
+
+                const language = item.language?.S?.toLowerCase();
+                if (Object.prototype.hasOwnProperty.call(byLanguage, language)) byLanguage[language] += views;
+            });
+
+            return {
+                statusCode: 200,
+                headers: { "Content-Type": "application/json", ...corsHeaders },
+                body: JSON.stringify({
+                    success: true,
+                    timezone: "America/New_York",
+                    period,
+                    summary: {
+                        ...summary,
+                        active_images: summary.active_images.size
+                    },
+                    active_image_ids: Array.from(summary.active_images),
+                    image_last_viewed: imageLastViewed,
+                    by_language: byLanguage,
+                    series: buildAnalyticsSeries(items, period, today)
+                })
+            };
+        }
+
+        // ==========================================
         // ROUTE: REAL-TIME INVENTORY LANGUAGE COUNTS
         // ==========================================
         if (httpMethod === "GET" && path.includes("/images/counts")) {
@@ -50,6 +194,7 @@ export const handler = async (event, context) => {
             let english = 0;
             let telugu = 0;
             let tamil = 0;
+            let hindi = 0;
 
             s3Objects.forEach(obj => {
                 if (obj.Key.endsWith('/')) return;
@@ -59,6 +204,8 @@ export const handler = async (event, context) => {
                     telugu++;
                 } else if (lowerKey.startsWith('tamil/')) {
                     tamil++;
+                } else if (lowerKey.startsWith('hindi/')) {
+                    hindi++;
                 } else if (lowerKey.startsWith('english/') || !lowerKey.includes('/')) {
                     english++;
                 }
@@ -67,7 +214,7 @@ export const handler = async (event, context) => {
             return {
                 statusCode: 200,
                 headers: { "Content-Type": "application/json", ...corsHeaders },
-                body: JSON.stringify({ english, telugu, tamil })
+                body: JSON.stringify({ english, telugu, tamil, hindi })
             };
         }
 
@@ -87,11 +234,10 @@ export const handler = async (event, context) => {
             }
 
             // Determine correct S3 folder prefix based on selected language
-            let folderPrefix = "";
             const cleanLang = (language || "english").toLowerCase();
-            if (cleanLang === "telugu") folderPrefix = "telugu/";
-            else if (cleanLang === "tamil") folderPrefix = "tamil/";
-            else if (cleanLang === "english") folderPrefix = "english/";
+            const supportedLanguages = new Set(["english", "telugu", "tamil", "hindi"]);
+            const resolvedLanguage = supportedLanguages.has(cleanLang) ? cleanLang : "english";
+            const folderPrefix = `${resolvedLanguage}/`;
 
             let finalS3Key = `${folderPrefix}${filename}`;
             let baseName = filename.substring(0, filename.lastIndexOf('.')) || filename;
