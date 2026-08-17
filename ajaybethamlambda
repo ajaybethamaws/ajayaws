@@ -3,7 +3,9 @@ import boto3
 import logging
 import time
 import base64
+from datetime import datetime, timezone
 from urllib.parse import parse_qs
+from zoneinfo import ZoneInfo
 from botocore.config import Config
 
 # --- GLOBAL INITIALIZATION ---
@@ -13,6 +15,7 @@ logger.setLevel(logging.INFO)
 # --- CONFIGURATION ---
 BUCKET_NAME = 'ajaybetham-sta'
 TABLE_NAME = 'verstantly-verse-images'
+VIEW_STATS_TABLE = 'verstantly-view-stats'
 REGION = 'us-east-1'
 CLOUDFRONT_DOMAIN = 'd15si3zl564vcw.cloudfront.net'
 CLOUDFRONT_BASE = f"https://{CLOUDFRONT_DOMAIN}"
@@ -28,7 +31,8 @@ BIBLE_COPYRIGHTS = {
     "NLT": "Holy Bible, New Living Translation, copyright © 1996, 2004, 2015 by Tyndale House Foundation. Used by permission.",
     "MSG": "Scripture quotations from THE MESSAGE. Copyright © by Eugene H. Peterson 1993, 2002, 2005, 2018. Used by permission of NavPress. All rights reserved.",
     "TELUGU": "Telugu Bible text courtesy of The Bible Society of India. Used by permission.",
-    "TAMIL": "Tamil Bible text courtesy of The Bible Society of India. Used by permission."
+    "TAMIL": "Tamil Bible text courtesy of The Bible Society of India. Used by permission.",
+    "HINDI": "Hindi Bible text courtesy of The Bible Society of India. Used by permission."
 }
 
 def get_copyright_text(version, folder_prefix):
@@ -37,6 +41,8 @@ def get_copyright_text(version, folder_prefix):
         return BIBLE_COPYRIGHTS["TELUGU"]
     elif folder_lower == "tamil/":
         return BIBLE_COPYRIGHTS["TAMIL"]
+    elif folder_lower == "hindi/":
+        return BIBLE_COPYRIGHTS["HINDI"]
     
     if folder_lower != "english/" or not version:
         return ""
@@ -47,13 +53,15 @@ def get_copyright_text(version, folder_prefix):
 dynamo_config = Config(retries={'max_attempts': 2}, tcp_keepalive=True, max_pool_connections=50)
 dynamo_client = boto3.client('dynamodb', region_name=REGION, config=dynamo_config)
 
-# Global in-memory structured cache supporting 3 languages
+# Global in-memory structured cache supporting 4 languages
 image_cache = {
     'english': {'items': [], 'last_updated': 0},
     'telugu': {'items': [], 'last_updated': 0},
-    'tamil': {'items': [], 'last_updated': 0}
+    'tamil': {'items': [], 'last_updated': 0},
+    'hindi': {'items': [], 'last_updated': 0}
 }
 CACHE_TTL_SECONDS = 300  # 5-minute global cache window
+REPORTING_TIMEZONE = ZoneInfo('America/New_York')
 
 def ensure_dict(value, default=None):
     """Return a dictionary when Lambda/API Gateway supplied JSON as a string."""
@@ -68,6 +76,37 @@ def ensure_dict(value, default=None):
             return fallback
     return fallback
 
+def record_daily_view(image_id, language):
+    """Increment the image's daily analytics bucket without storing raw view events."""
+    now_utc = datetime.now(timezone.utc)
+    view_date = now_utc.astimezone(REPORTING_TIMEZONE).strftime('%Y-%m-%d')
+    timestamp = now_utc.isoformat(timespec='seconds').replace('+00:00', 'Z')
+    clean_language = language if language in {'english', 'telugu', 'tamil', 'hindi'} else 'english'
+
+    dynamo_client.update_item(
+        TableName=VIEW_STATS_TABLE,
+        Key={
+            'image_id': {'S': image_id},
+            'view_date': {'S': view_date}
+        },
+        UpdateExpression=(
+            'SET #first = if_not_exists(#first, :timestamp), '
+            '#last = :timestamp, #language = :language '
+            'ADD #daily_views :increment'
+        ),
+        ExpressionAttributeNames={
+            '#first': 'first_viewed_at',
+            '#last': 'last_viewed_at',
+            '#language': 'language',
+            '#daily_views': 'daily_views'
+        },
+        ExpressionAttributeValues={
+            ':timestamp': {'S': timestamp},
+            ':language': {'S': clean_language},
+            ':increment': {'N': '1'}
+        }
+    )
+
 def get_cached_db_assets(folder_prefix, search_query=''):
     global image_cache
     current_time = time.time()
@@ -76,6 +115,8 @@ def get_cached_db_assets(folder_prefix, search_query=''):
         cache_key = 'telugu'
     elif folder_prefix == "tamil/":
         cache_key = 'tamil'
+    elif folder_prefix == "hindi/":
+        cache_key = 'hindi'
     else:
         cache_key = 'english'
     
@@ -144,7 +185,8 @@ def find_translation_alternatives(reference):
     lang_map = {
         'english': '',
         'telugu': 'telugu',
-        'tamil': 'tamil'
+        'tamil': 'tamil',
+        'hindi': 'hindi'
     }
     
     for lang_key, prefix in lang_map.items():
@@ -213,6 +255,7 @@ def lambda_handler(event, context):
                 
                 body = ensure_dict(raw_body)
                 image_id = body.get('image_id')
+                language = str(body.get('language', 'english')).strip().lower()
                 
                 if image_id:
                     normalized_id = image_id.strip().lower()
@@ -223,6 +266,16 @@ def lambda_handler(event, context):
                         ExpressionAttributeNames={'#v': 'views'},
                         ExpressionAttributeValues={':zero': {'N': '0'}, ':inc': {'N': '1'}}
                     )
+
+                    # Analytics are deliberately isolated so a reporting failure
+                    # never prevents the existing cumulative counter from working.
+                    try:
+                        record_daily_view(normalized_id, language)
+                    except Exception as analytics_err:
+                        logger.error(
+                            f"Daily analytics update failed for image [{normalized_id}]: "
+                            f"{str(analytics_err)}"
+                        )
                 return {
                     'statusCode': 200, 
                     'headers': {
@@ -247,6 +300,9 @@ def lambda_handler(event, context):
         elif clean_path == "tamil":
             lang_mode = "tamil"
             folder_prefix = "tamil/"
+        elif clean_path == "hindi":
+            lang_mode = "hindi"
+            folder_prefix = "hindi/"
         else:
             lang_mode = "english"
             folder_prefix = "english/"
@@ -255,7 +311,7 @@ def lambda_handler(event, context):
         domain = headers.get('host', 'verstantly.com') 
         base_url = f"https://{domain}"
 
-        if clean_path in ["favicon.ico", "apple-touch-icon.png", "logo.png", "home-preview.jpg", "home-preview-telugu.jpg", "home-preview-tamil.jpg"]:
+        if clean_path in ["favicon.ico", "apple-touch-icon.png", "logo.png", "home-preview.jpg", "home-preview-telugu.jpg", "home-preview-tamil.jpg", "home-preview-hindi.jpg"]:
             return {'statusCode': 302, 'headers': {'Location': f"{S3_DIRECT_URL}/{clean_path}"}, 'body': ''}
 
         raw_query_params = event.get('queryStringParameters')
@@ -267,7 +323,8 @@ def lambda_handler(event, context):
             image_cache = {
                 'english': {'items': [], 'last_updated': 0},
                 'telugu': {'items': [], 'last_updated': 0},
-                'tamil': {'items': [], 'last_updated': 0}
+                'tamil': {'items': [], 'last_updated': 0},
+                'hindi': {'items': [], 'last_updated': 0}
             }
 
         search_query = query_params.get('q', '').strip()
@@ -282,6 +339,10 @@ def lambda_handler(event, context):
                 social_img_path = f"{S3_DIRECT_URL}/home-preview-telugu.jpg?wspreview=1"
             elif lang_mode == "tamil":
                 social_img_path = f"{S3_DIRECT_URL}/home-preview-tamil.jpg?wspreview=1"
+            elif lang_mode == "hindi":
+                # Use the existing generic home preview until a Hindi-specific
+                # social preview image is uploaded to S3.
+                social_img_path = f"{S3_DIRECT_URL}/home-preview.jpg?wspreview=1"
             else:
                 social_img_path = f"{S3_DIRECT_URL}/home-preview.jpg?wspreview=1"
                 
@@ -307,7 +368,7 @@ def lambda_handler(event, context):
             h += f'{{"@context":"https://schema.org/","@type":"ImageObject","contentUrl":"{CLOUDFRONT_BASE}/{target_asset["s3_key"]}","name":"{safe_name}","caption":"{safe_caption}"}}'
             h += f'</script>'
 
-        path_suffix = f"{clean_path}" if clean_path in ["telugu", "tamil"] else ""
+        path_suffix = f"{clean_path}" if clean_path in ["telugu", "tamil", "hindi"] else ""
         h += f'<meta property="og:title" content="{display_title}">'
         h += f'<meta property="og:image" content="{social_img_path}">'
         h += f'<meta property="og:image:type" content="image/jpeg">'
@@ -318,7 +379,7 @@ def lambda_handler(event, context):
         h += f'<meta property="og:description" content="{display_desc}">'
         
         h += f'<title>{display_title}</title><link rel="icon" href="/favicon.ico">'
-        h += '<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;700&family=Noto+Sans+Telugu:wght@400;700&family=Noto+Sans+Tamil:wght@400;700&display=swap" rel="stylesheet">'
+        h += '<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;700&family=Noto+Sans+Devanagari:wght@400;700&family=Noto+Sans+Telugu:wght@400;700&family=Noto+Sans+Tamil:wght@400;700&display=swap" rel="stylesheet">'
         
         # CSS STYLING
         h += '<style>'
@@ -330,11 +391,12 @@ def lambda_handler(event, context):
         
         # HEADER LANGUAGE SELECTOR PILLS
         h += '.header-lang-selector { position: fixed; top: max(20px, env(safe-area-inset-top)); right: max(20px, env(safe-area-inset-right)); z-index: 100; display: flex; gap: 6px; background: rgba(30, 41, 59, 0.88); border: 1px solid rgba(255, 255, 255, 0.1); border-radius: 24px; padding: 4px; backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px); box-shadow: 0 4px 12px rgba(0,0,0,0.2); }'
-        h += '.header-lang-segment { display: inline-flex; align-items: center; justify-content: center; padding: 6px 16px; border-radius: 20px; font-size: 12px; font-weight: 700; color: #94a3b8; text-decoration: none; transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1); letter-spacing: 0.05em; }'
+        h += '.header-lang-segment { display: inline-flex; align-items: center; justify-content: center; width: 48px; box-sizing: border-box; padding: 6px 0; border-radius: 20px; font-size: 12px; font-weight: 700; color: #94a3b8; text-decoration: none; transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1); letter-spacing: 0.05em; }'
         h += '.header-lang-segment:hover { color: #e2e8f0; background: rgba(255,255,255,0.05); }'
         h += '.header-lang-segment.active { background: #38bdf8; color: #0f172a; box-shadow: 0 2px 8px rgba(56,189,248,0.4); }'
         h += '.lang-te { font-family: "Noto Sans Telugu", sans-serif; font-size: 13px; }'
         h += '.lang-ta { font-family: "Noto Sans Tamil", sans-serif; font-size: 13px; }'
+        h += '.lang-hi { font-family: "Noto Sans Devanagari", sans-serif; font-size: 13px; }'
 
         h += '.search-bar-wrapper { width: 100%; max-width: 420px; margin-top: 6px; margin-bottom: 10px; display: flex; position: relative; }'
         h += '.search-input { width: 100%; padding: 12px 18px 12px 42px; border-radius: 24px; border: 1px solid rgba(255,255,255,0.15); background: rgba(255,255,255,0.06); color: white; outline: none; font-size: 14px; transition: all 0.3s ease; backdrop-filter: blur(8px); }'
@@ -347,6 +409,9 @@ def lambda_handler(event, context):
         elif lang_mode == "tamil":
             h += '.banner-text { font-family: "Noto Sans Tamil", "Inter", sans-serif; font-size: 19px; font-weight: 400; line-height: 1.8; color: #e2e8f0; max-width: 650px; margin: 0 0 16px 0; letter-spacing: 0.02em; }'
             h += '.banner-reference { font-family: "Noto Sans Tamil", "Inter", sans-serif; font-size: 14px; font-weight: 700; color: #38bdf8; margin: 0; }'
+        elif lang_mode == "hindi":
+            h += '.banner-text { font-family: "Noto Sans Devanagari", "Inter", sans-serif; font-size: 20px; font-weight: 400; line-height: 1.8; color: #e2e8f0; max-width: 650px; margin: 0 0 16px 0; letter-spacing: 0.02em; }'
+            h += '.banner-reference { font-family: "Noto Sans Devanagari", "Inter", sans-serif; font-size: 14px; font-weight: 700; color: #38bdf8; margin: 0; }'
         else:
             h += '.banner-text { font-size: 18px; font-weight: 400; line-height: 1.6; color: #e2e8f0; max-width: 600px; margin: 0 0 16px 0; font-style: italic; letter-spacing: -0.01em; }'
             h += '.banner-reference { font-size: 13px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.15em; color: #38bdf8; margin: 0; }'
@@ -376,7 +441,7 @@ def lambda_handler(event, context):
         
         # LIGHTBOX LANGUAGE SWITCHER PILLS
         h += '.lightbox-lang-switcher { display: none; align-self: center; flex: 0 0 auto; z-index: 210; gap: 4px; align-items: center; margin: 0 0 10px 0; padding: 5px; border-radius: 18px; background: rgba(15, 23, 42, 0.88); border: 1px solid rgba(255,255,255,0.14); box-shadow: 0 4px 14px rgba(0,0,0,0.35); backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px); touch-action: manipulation; }'
-        h += '.lb-lang-pill { padding: 4px 8px; border-radius: 12px; font-size: 11px; font-weight: 700; color: #94a3b8; background: rgba(255,255,255,0.05); text-decoration: none; border: 1px solid rgba(255,255,255,0.1); transition: all 0.2s; cursor: pointer; }'
+        h += '.lb-lang-pill { display: inline-flex; align-items: center; justify-content: center; width: 40px; box-sizing: border-box; padding: 4px 0; border-radius: 12px; font-size: 11px; font-weight: 700; color: #94a3b8; background: rgba(255,255,255,0.05); text-decoration: none; border: 1px solid rgba(255,255,255,0.1); transition: all 0.2s; cursor: pointer; }'
         h += '.lb-lang-pill:hover { background: #38bdf8; color: #0f172a; border-color: #38bdf8; }'
         h += '.lb-lang-pill.active { background: #38bdf8; color: #0f172a; border-color: #38bdf8; }'
         h += '.lb-lang-pill.disabled { opacity: 0.2; pointer-events: none; border-color: transparent; background: transparent; }'
@@ -387,7 +452,7 @@ def lambda_handler(event, context):
         h += '.modal input { background: rgba(255,255,255,0.1); border: 1px solid rgba(255,255,255,0.2); color: white; padding: 12px; border-radius: 10px; width: 100%; box-sizing: border-box; margin-bottom: 12px; outline: none; font-size: 16px; }'
         h += '.modal button { background: #38bdf8; color: #0f172a; border: none; padding: 12px; width: 100%; border-radius: 10px; font-weight: bold; cursor: pointer; font-size: 16px; }'
         
-        h += '@media (max-width: 768px) { .header-container { padding: 40px 16px 20px 16px; } .profile-logo-wrapper { width: 75px; height: 75px; margin-bottom: 14px; } .profile-logo img { width: 48px; height: 48px; } .banner-text { font-size: 16px; } .gallery-grid { gap: 4px; padding: 0 4px; } .grid-item { border-radius: 4px; } .divider { margin-bottom: 16px; } .lightbox-content { max-width: 95vw; } .lightbox-actions { gap: 8px; padding: 6px 12px; } .lightbox-btn { width: 32px; height: 32px; } .lightbox-lang-switcher { gap: 2px; margin-bottom: 8px; padding: 4px; } .lb-lang-pill { padding: 4px 6px; font-size: 10px; } .watermark-overlay { bottom: 12px; width: 32px; height: 32px; } .header-lang-selector { top: max(12px, env(safe-area-inset-top)); right: max(12px, env(safe-area-inset-right)); gap: 2px; } .header-lang-segment { padding: 5px 9px; font-size: 10px; } }'
+        h += '@media (max-width: 768px) { .header-container { padding: 40px 16px 20px 16px; } .profile-logo-wrapper { width: 75px; height: 75px; margin-bottom: 14px; } .profile-logo img { width: 48px; height: 48px; } .banner-text { font-size: 16px; } .gallery-grid { gap: 4px; padding: 0 4px; } .grid-item { border-radius: 4px; } .divider { margin-bottom: 16px; } .lightbox-content { max-width: 95vw; } .lightbox-actions { gap: 8px; padding: 6px 12px; } .lightbox-btn { width: 32px; height: 32px; } .lightbox-lang-switcher { gap: 2px; margin-bottom: 8px; padding: 4px; } .lb-lang-pill { width: 36px; padding: 4px 0; font-size: 10px; } .watermark-overlay { bottom: 12px; width: 32px; height: 32px; } .header-lang-selector { top: max(12px, env(safe-area-inset-top)); right: max(12px, env(safe-area-inset-right)); gap: 2px; } .header-lang-segment { width: 40px; padding: 5px 0; font-size: 10px; } }'
         h += '</style></head><body>'
         
         h += '<div class="icon-btn bell-btn" onclick="toggleM(event)"><svg width="20" height="20" fill="currentColor" viewBox="0 0 24 24"><path d="M12 22c1.1 0 2-.9 2-2h-4c0 1.1.89 2 2 2zm6-6v-5c0-3.07-1.64-5.64-4.5-6.32V4c0-.83-.67-1.5-1.5-1.5s-1.5 1.5-1.5 1.5v.68C7.63 5.36 6 7.92 6 11v5l-2 2v1h16v-1l-2-2z"/></svg></div>'
@@ -400,9 +465,10 @@ def lambda_handler(event, context):
         
         # Header Language Switcher Pills
         h += '  <div class="header-lang-selector">'
-        h += f'    <a href="/" class="header-lang-segment {"active" if lang_mode == "english" else ""}">EN</a>'
-        h += f'    <a href="/telugu" class="header-lang-segment lang-te {"active" if lang_mode == "telugu" else ""}">తెలుగు</a>'
-        h += f'    <a href="/tamil" class="header-lang-segment lang-ta {"active" if lang_mode == "tamil" else ""}">தமிழ்</a>'
+        h += f'    <a href="/" class="header-lang-segment {"active" if lang_mode == "english" else ""}">ENG</a>'
+        h += f'    <a href="/telugu" class="header-lang-segment {"active" if lang_mode == "telugu" else ""}">TEL</a>'
+        h += f'    <a href="/tamil" class="header-lang-segment {"active" if lang_mode == "tamil" else ""}">TAM</a>'
+        h += f'    <a href="/hindi" class="header-lang-segment {"active" if lang_mode == "hindi" else ""}">HIN</a>'
         h += '  </div>'
         
         if lang_mode == "telugu":
@@ -411,6 +477,9 @@ def lambda_handler(event, context):
         elif lang_mode == "tamil":
             h += '  <p class="banner-text">"தேவனுடைய வார்த்தையெல்லாம் புடமிடப்பட்டவை; தம்மை அண்டிக்கொள்ளுகிறவர்களுக்கு அவர் கேடகமானவர்."</p>'
             h += '  <p class="banner-reference">நீதிமொழிகள் 30:5</p>'
+        elif lang_mode == "hindi":
+            h += '  <p class="banner-text">"परमेश्वर का प्रत्येक वचन शुद्ध है; वह उन लोगों की ढाल है जो उसकी शरण लेते हैं।"</p>'
+            h += '  <p class="banner-reference">नीतिवचन 30:5</p>'
         else:
             h += '  <p class="banner-text">"Every word of God is pure; He is a shield to those who put their trust in Him."</p>'
             h += '  <p class="banner-reference">Proverbs 30:5</p>'
@@ -447,9 +516,10 @@ def lambda_handler(event, context):
         h += '  <div id="lbContent" class="lightbox-content" onclick="event.stopPropagation()">'
         # Keep the switcher outside the image's swipe/touch surface.
         h += '    <div id="lightboxLangSwitcher" class="lightbox-lang-switcher" ontouchstart="event.stopPropagation()" ontouchmove="event.stopPropagation()" ontouchend="event.stopPropagation()">'
-        h += '      <span id="lnkEn" onclick="switchLanguageAlt(\'english\')" class="lb-lang-pill">EN</span>'
-        h += '      <span id="lnkTe" onclick="switchLanguageAlt(\'telugu\')" class="lb-lang-pill lang-te">తెలుగు</span>'
-        h += '      <span id="lnkTa" onclick="switchLanguageAlt(\'tamil\')" class="lb-lang-pill lang-ta">தமிழ்</span>'
+        h += '      <span id="lnkEn" onclick="switchLanguageAlt(\'english\')" class="lb-lang-pill">ENG</span>'
+        h += '      <span id="lnkTe" onclick="switchLanguageAlt(\'telugu\')" class="lb-lang-pill">TEL</span>'
+        h += '      <span id="lnkTa" onclick="switchLanguageAlt(\'tamil\')" class="lb-lang-pill">TAM</span>'
+        h += '      <span id="lnkHi" onclick="switchLanguageAlt(\'hindi\')" class="lb-lang-pill">HIN</span>'
         h += '    </div>'
         h += '    <div class="img-frame">'
         h += '      <img id="lightbox-img" class="lightbox-img" src="" alt="Expanded Verse">'
@@ -519,15 +589,16 @@ def lambda_handler(event, context):
         
         # Update active pill states and browser URL gracefully
         h += '  document.getElementById("lnkEn").className = "lb-lang-pill" + (langKey === "english" ? " active" : "");'
-        h += '  document.getElementById("lnkTe").className = "lb-lang-pill lang-te" + (langKey === "telugu" ? " active" : "");'
-        h += '  document.getElementById("lnkTa").className = "lb-lang-pill lang-ta" + (langKey === "tamil" ? " active" : "");'
+        h += '  document.getElementById("lnkTe").className = "lb-lang-pill" + (langKey === "telugu" ? " active" : "");'
+        h += '  document.getElementById("lnkTa").className = "lb-lang-pill" + (langKey === "tamil" ? " active" : "");'
+        h += '  document.getElementById("lnkHi").className = "lb-lang-pill" + (langKey === "hindi" ? " active" : "");'
         
         h += '  const urlObj = new URL(window.location.href);'
         h += '  urlObj.pathname = langKey === "english" ? "/" : "/" + langKey;'
         h += '  urlObj.searchParams.set("id", target.id);'
         h += '  window.history.replaceState({path:urlObj.toString()}, "", urlObj.toString());'
         
-        h += '  fetch("/increment-view", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ image_id: target.id }) }).catch(() => {});'
+        h += '  fetch("/increment-view", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ image_id: target.id, language: langKey }) }).catch(() => {});'
         h += '}'
         
         # LIGHTBOX OPEN WITH DYNAMIC TRANSLATION PILLS TOGGLE
@@ -551,24 +622,28 @@ def lambda_handler(event, context):
         h += '  const lnkEn = document.getElementById("lnkEn");'
         h += '  const lnkTe = document.getElementById("lnkTe");'
         h += '  const lnkTa = document.getElementById("lnkTa");'
+        h += '  const lnkHi = document.getElementById("lnkHi");'
         h += '  const trans = asset.translations || {};'
         
         h += '  switcher.style.display = "flex";'
         
         # Determine current active language based on which translation matches the active asset or the page mode
-        h += '  const currentLang = (' + ('"' + lang_mode + '" === "telugu"') + ' && trans.telugu && trans.telugu.id === targetId) ? "telugu" : (' + ('"' + lang_mode + '" === "tamil"') + ' && trans.tamil && trans.tamil.id === targetId) ? "tamil" : (!trans.telugu && !trans.tamil) ? "english" : "english";'
+        h += '  const currentLang = "' + lang_mode + '";'
         
         # Alternatively, check against whichever language version matches the item's prefix/id
         h += '  if (trans.english) { lnkEn.className = "lb-lang-pill" + (trans.english.id === targetId ? " active" : ""); }'
         h += '  else { lnkEn.className = "lb-lang-pill disabled"; }'
         
-        h += '  if (trans.telugu) { lnkTe.className = "lb-lang-pill lang-te" + (trans.telugu.id === targetId ? " active" : ""); }'
-        h += '  else { lnkTe.className = "lb-lang-pill lang-te disabled"; }'
+        h += '  if (trans.telugu) { lnkTe.className = "lb-lang-pill" + (trans.telugu.id === targetId ? " active" : ""); }'
+        h += '  else { lnkTe.className = "lb-lang-pill disabled"; }'
         
-        h += '  if (trans.tamil) { lnkTa.className = "lb-lang-pill lang-ta" + (trans.tamil.id === targetId ? " active" : ""); }'
-        h += '  else { lnkTa.className = "lb-lang-pill lang-ta disabled"; }'
+        h += '  if (trans.tamil) { lnkTa.className = "lb-lang-pill" + (trans.tamil.id === targetId ? " active" : ""); }'
+        h += '  else { lnkTa.className = "lb-lang-pill disabled"; }'
+
+        h += '  if (trans.hindi) { lnkHi.className = "lb-lang-pill" + (trans.hindi.id === targetId ? " active" : ""); }'
+        h += '  else { lnkHi.className = "lb-lang-pill disabled"; }'
         
-        h += '  fetch("/increment-view", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ image_id: targetId }) }).catch(() => {});'
+        h += f'  fetch("/increment-view", {{ method: "POST", headers: {{ "Content-Type": "application/json" }}, body: JSON.stringify({{ image_id: targetId, language: "{lang_mode}" }}) }}).catch(() => {{}});'
         h += '}'
         
         h += 'function closeLightbox() {'
