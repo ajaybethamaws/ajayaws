@@ -70,6 +70,7 @@ export const handler = async (event) => {
             let folderPrefix = "english/";
             if (language === "telugu") folderPrefix = "telugu/";
             if (language === "tamil") folderPrefix = "tamil/";
+            if (language === "hindi") folderPrefix = "hindi/";
 
             let safeFileName = filename.replace(/\s+/g, "_");
             if (safeFileName.endsWith('.JPG') || safeFileName.endsWith('.JPEG')) {
@@ -143,7 +144,7 @@ export const handler = async (event) => {
 
                     label { display: block; text-align: left; font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; color: #38bdf8; margin-bottom: 8px; }
                     
-                    .lang-group { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-bottom: 24px; }
+                    .lang-group { display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px; margin-bottom: 24px; }
                     .lang-option { position: relative; }
                     .lang-option input { position: absolute; opacity: 0; width: 0; height: 0; }
                     .lang-label { display: flex; align-items: center; justify-content: center; height: 46px; background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.08); border-radius: 12px; font-size: 13px; font-weight: 600; color: #94a3b8; cursor: pointer; transition: all 0.2s ease; }
@@ -187,6 +188,10 @@ export const handler = async (event) => {
                             <div class="lang-option">
                                 <input type="radio" id="lang-en" name="language" value="english" checked>
                                 <label for="lang-en" class="lang-label">English</label>
+                            </div>
+                            <div class="lang-option">
+                                <input type="radio" id="lang-hi" name="language" value="hindi">
+                                <label for="lang-hi" class="lang-label">हिन्दी</label>
                             </div>
                             <div class="lang-option">
                                 <input type="radio" id="lang-te" name="language" value="telugu">
