@@ -48,8 +48,6 @@ export const handler = async (event) => {
             .replace(/\s+/g, "-")           // Turn spaces into single hyphens
             .replace(/[^a-z0-9.\-_]/g, ""); // Strip out invalid characters
 
-        const newS3Key = `images/${sanitizedFilename}`;
-
         // 4. Retrieve existing state from DynamoDB
         const currentItem = await docClient.send(new GetCommand({
             TableName: TABLE_NAME,
@@ -61,6 +59,10 @@ export const handler = async (event) => {
         }
 
         const oldS3Key = currentItem.Item.s3_key;
+        // Preserve the current language folder, including hindi/, when renaming.
+        const lastSlashIndex = oldS3Key.lastIndexOf("/");
+        const existingFolderPrefix = lastSlashIndex >= 0 ? oldS3Key.slice(0, lastSlashIndex + 1) : "";
+        const newS3Key = `${existingFolderPrefix}${sanitizedFilename}`;
         let finalS3Key = oldS3Key;
         let finalFilename = currentItem.Item.current_filename;
 
