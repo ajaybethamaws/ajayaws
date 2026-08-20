@@ -1,10 +1,12 @@
 import { S3Client, ListObjectsV2Command, HeadObjectCommand, CopyObjectCommand, DeleteObjectCommand, PutObjectCommand } from "@aws-sdk/client-s3";
 import { DynamoDBClient, ScanCommand, PutItemCommand, UpdateItemCommand } from "@aws-sdk/client-dynamodb";
 import { SNSClient, PublishCommand } from "@aws-sdk/client-sns";
+import { BedrockRuntimeClient, ConverseCommand } from "@aws-sdk/client-bedrock-runtime";
 
 const s3 = new S3Client({});
 const dynamo = new DynamoDBClient({});
 const sns = new SNSClient({});
+const bedrock = new BedrockRuntimeClient({ region: "us-east-1" });
 
 const TABLE_NAME = "verstantly-verse-images";
 const VIEW_STATS_TABLE = "verstantly-view-stats";
@@ -119,6 +121,96 @@ export const handler = async (event, context) => {
     }
 
     try {
+        // ==========================================
+        // ROUTE: AI-ASSISTED TRANSLITERATION
+        // ==========================================
+        if (httpMethod === "POST" && path.includes("/transliterate")) {
+            const body = JSON.parse(event.body || "{}");
+            const language = String(body.language || "").trim().toLowerCase();
+            const nativeReference = String(body.native_reference || "").trim();
+            const nativeText = String(body.native_text || "").trim();
+            const supportedLanguages = new Set(["telugu", "tamil", "hindi"]);
+
+            if (!supportedLanguages.has(language)) {
+                return {
+                    statusCode: 400,
+                    headers: { "Content-Type": "application/json", ...corsHeaders },
+                    body: JSON.stringify({ success: false, message: "Supported language must be Telugu, Tamil, or Hindi." })
+                };
+            }
+
+            if (!nativeReference && !nativeText) {
+                return {
+                    statusCode: 400,
+                    headers: { "Content-Type": "application/json", ...corsHeaders },
+                    body: JSON.stringify({ success: false, message: "Enter a native reference or native verse text first." })
+                };
+            }
+
+            if (nativeReference.length > 250 || nativeText.length > 5000) {
+                return {
+                    statusCode: 400,
+                    headers: { "Content-Type": "application/json", ...corsHeaders },
+                    body: JSON.stringify({ success: false, message: "Native reference or verse text is too long." })
+                };
+            }
+
+            const promptInput = JSON.stringify({
+                language,
+                native_reference: nativeReference,
+                native_text: nativeText
+            });
+
+            const modelResponse = await bedrock.send(new ConverseCommand({
+                modelId: "amazon.nova-lite-v1:0",
+                system: [{
+                    text: [
+                        "You transliterate Bible references and Bible verse text from Telugu, Tamil, or Hindi script into readable Latin letters.",
+                        "Transliterate only; do not translate or paraphrase.",
+                        "Preserve chapter and verse numbers, punctuation, meaning, and word order.",
+                        "Prefer familiar readable spellings used by native speakers rather than scholarly diacritics.",
+                        "Return only a valid JSON object with exactly two string properties: native_reference_transliteration and transliteration.",
+                        "If an input value is empty, return an empty string for its corresponding output property.",
+                        "Do not include markdown, code fences, explanations, or additional properties."
+                    ].join(" ")
+                }],
+                messages: [{
+                    role: "user",
+                    content: [{ text: promptInput }]
+                }],
+                inferenceConfig: {
+                    maxTokens: 1500,
+                    temperature: 0.1,
+                    topP: 0.9
+                }
+            }));
+
+            const rawModelText = (modelResponse.output?.message?.content || [])
+                .map(part => part.text || "")
+                .join("")
+                .trim();
+            const jsonMatch = rawModelText.match(/\{[\s\S]*\}/);
+            if (!jsonMatch) throw new Error("Bedrock returned an invalid transliteration response.");
+
+            const generated = JSON.parse(jsonMatch[0]);
+            const nativeReferenceTransliteration = typeof generated.native_reference_transliteration === "string"
+                ? generated.native_reference_transliteration.trim()
+                : "";
+            const transliteration = typeof generated.transliteration === "string"
+                ? generated.transliteration.trim()
+                : "";
+
+            return {
+                statusCode: 200,
+                headers: { "Content-Type": "application/json", ...corsHeaders },
+                body: JSON.stringify({
+                    success: true,
+                    native_reference_transliteration: nativeReferenceTransliteration,
+                    transliteration
+                })
+            };
+        }
+
         // ==========================================
         // ROUTE: VIEW ANALYTICS
         // ==========================================
@@ -364,7 +456,11 @@ export const handler = async (event, context) => {
                         s3_key: targetKey,
                         current_filename: matchedItem.current_filename?.S || targetKey.split('/').pop(),
                         reference: matchedItem.reference?.S || "",
+                        native_reference: matchedItem.native_reference?.S || "",
+                        native_reference_transliteration: matchedItem.native_reference_transliteration?.S || "",
                         verse_text: matchedItem.verse_text?.S || "",
+                        native_text: matchedItem.native_text?.S || "",
+                        transliteration: matchedItem.transliteration?.S || "",
                         bible_version: matchedItem.bible_version?.S || "",
                         created_at: matchedItem.created_at?.S || s3EpochTimestamp,
                         views: matchedItem.views?.N ? parseInt(matchedItem.views.N, 10) : 0
@@ -391,7 +487,11 @@ export const handler = async (event, context) => {
                         s3_key: targetKey,
                         current_filename: fileName,
                         reference: "",
+                        native_reference: "",
+                        native_reference_transliteration: "",
                         verse_text: "",
+                        native_text: "",
+                        transliteration: "",
                         bible_version: "",
                         created_at: s3EpochTimestamp,
                         views: 0
@@ -420,7 +520,17 @@ export const handler = async (event, context) => {
             const pathId = pathParts[pathParts.length - 1];
             const image_id = body.image_id || body.id || (pathId !== "update" && pathId !== "images" ? pathId : null);
             
-            const { s3_key, reference, verse_text, requested_filename, bible_version } = body;
+            const {
+                s3_key,
+                reference,
+                native_reference,
+                native_reference_transliteration,
+                verse_text,
+                native_text,
+                transliteration,
+                requested_filename,
+                bible_version
+            } = body;
 
             if (!image_id) {
                 return {
@@ -497,24 +607,55 @@ export const handler = async (event, context) => {
                 await s3.send(new DeleteObjectCommand({ Bucket: BUCKET_NAME, Key: currentS3Key }));
             }
 
+            const updateParts = [
+                "#ref = :r",
+                "#vxt = :v",
+                "#fnm = :f",
+                "#s3k = :k",
+                "#bv = :b"
+            ];
+            const updateNames = {
+                "#ref": "reference",
+                "#vxt": "verse_text",
+                "#fnm": "current_filename",
+                "#s3k": "s3_key",
+                "#bv": "bible_version"
+            };
+            const updateValues = {
+                ":r": { S: reference || "" },
+                ":v": { S: verse_text || "" },
+                ":f": { S: finalFileName || currentFileName },
+                ":k": { S: finalS3Key },
+                ":b": { S: bible_version || "" }
+            };
+
+            if (Object.prototype.hasOwnProperty.call(body, "native_text")) {
+                updateParts.push("#ntx = :n");
+                updateNames["#ntx"] = "native_text";
+                updateValues[":n"] = { S: native_text || "" };
+            }
+            if (Object.prototype.hasOwnProperty.call(body, "transliteration")) {
+                updateParts.push("#trl = :t");
+                updateNames["#trl"] = "transliteration";
+                updateValues[":t"] = { S: transliteration || "" };
+            }
+            if (Object.prototype.hasOwnProperty.call(body, "native_reference")) {
+                updateParts.push("#nrf = :nr");
+                updateNames["#nrf"] = "native_reference";
+                updateValues[":nr"] = { S: native_reference || "" };
+            }
+            if (Object.prototype.hasOwnProperty.call(body, "native_reference_transliteration")) {
+                updateParts.push("#nrt = :nrt");
+                updateNames["#nrt"] = "native_reference_transliteration";
+                updateValues[":nrt"] = { S: native_reference_transliteration || "" };
+            }
+
             await dynamo.send(new UpdateItemCommand({
                 TableName: TABLE_NAME,
                 Key: { "image_id": { S: image_id } },
-                UpdateExpression: "SET #ref = :r, #vxt = :v, #fnm = :f, #s3k = :k, #bv = :b",
-                ExpressionAttributeNames: {
-                    "#ref": "reference",
-                    "#vxt": "verse_text",
-                    "#fnm": "current_filename",
-                    "#s3k": "s3_key",
-                    "#bv": "bible_version"
-                },
-                ExpressionAttributeValues: {
-                    ":r": { S: reference || "" },
-                    ":v": { S: verse_text || "" },
-                    ":f": { S: finalFileName || currentFileName },
-                    ":k": { S: finalS3Key },
-                    ":b": { S: bible_version || "" }
-                }
+                UpdateExpression: `SET ${updateParts.join(", ")}`,
+                ExpressionAttributeNames: updateNames,
+                ExpressionAttributeValues: updateValues
             }));
 
             try {
@@ -549,7 +690,18 @@ export const handler = async (event, context) => {
                 headers: { "Content-Type": "application/json", ...corsHeaders },
                 body: JSON.stringify({
                     success: true,
-                    data: { image_id, s3_key: finalS3Key, current_filename: finalFileName || currentFileName, reference, verse_text, bible_version }
+                    data: {
+                        image_id,
+                        s3_key: finalS3Key,
+                        current_filename: finalFileName || currentFileName,
+                        reference,
+                        native_reference,
+                        native_reference_transliteration,
+                        verse_text,
+                        native_text,
+                        transliteration,
+                        bible_version
+                    }
                 })
             };
         }
