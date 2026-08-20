@@ -4,7 +4,8 @@ import logging
 import time
 import base64
 from datetime import datetime, timezone
-from urllib.parse import parse_qs
+from html import escape
+from urllib.parse import parse_qs, quote
 from zoneinfo import ZoneInfo
 from botocore.config import Config
 
@@ -21,6 +22,7 @@ CLOUDFRONT_DOMAIN = 'd15si3zl564vcw.cloudfront.net'
 CLOUDFRONT_BASE = f"https://{CLOUDFRONT_DOMAIN}"
 S3_DIRECT_URL = f"https://{BUCKET_NAME}.s3.{REGION}.amazonaws.com"
 SUBSCRIBER_URL = "https://dpqshmdcgoahjdfxae56f65evy0ohfvl.lambda-url.us-east-1.on.aws/"
+PUBLIC_BASE_URL = "https://verstantly.com"
 
 # --- BIBLE TRANSLATION COPYRIGHT MAPPINGS ---
 BIBLE_COPYRIGHTS = {
@@ -146,7 +148,11 @@ def get_cached_db_assets(folder_prefix, search_query=''):
                         'id': item.get('image_id', {}).get('S', ''),
                         's3_key': s3_key,
                         'reference': item.get('reference', {}).get('S', ''),
+                        'native_reference': item.get('native_reference', {}).get('S', ''),
+                        'native_reference_transliteration': item.get('native_reference_transliteration', {}).get('S', ''),
                         'verse_text': item.get('verse_text', {}).get('S', ''),
+                        'native_text': item.get('native_text', {}).get('S', ''),
+                        'transliteration': item.get('transliteration', {}).get('S', ''),
                         'bible_version': version_val,
                         'copyright': get_copyright_text(version_val, folder_prefix),
                         'sort_value': raw_ts
@@ -163,7 +169,11 @@ def get_cached_db_assets(folder_prefix, search_query=''):
         searched_items = []
         for img in base_items:
             if (query_lower in str(img.get('reference', '')).lower()) or \
+               (query_lower in str(img.get('native_reference', '')).lower()) or \
+               (query_lower in str(img.get('native_reference_transliteration', '')).lower()) or \
                (query_lower in str(img.get('verse_text', '')).lower()) or \
+               (query_lower in str(img.get('native_text', '')).lower()) or \
+               (query_lower in str(img.get('transliteration', '')).lower()) or \
                (query_lower in str(img.get('bible_version', '')).lower()) or \
                (query_lower in str(img.get('id', '')).lower()) or \
                (query_lower in str(img.get('s3_key', '')).lower()):
@@ -226,13 +236,86 @@ def get_single_db_asset(image_id, folder_prefix):
                 'id': item.get('image_id', {}).get('S', ''),
                 's3_key': s3_key,
                 'reference': item.get('reference', {}).get('S', ''),
+                'native_reference': item.get('native_reference', {}).get('S', ''),
+                'native_reference_transliteration': item.get('native_reference_transliteration', {}).get('S', ''),
                 'verse_text': item.get('verse_text', {}).get('S', ''),
+                'native_text': item.get('native_text', {}).get('S', ''),
+                'transliteration': item.get('transliteration', {}).get('S', ''),
                 'bible_version': version_val,
                 'copyright': get_copyright_text(version_val, folder_prefix)
             }
     except Exception as e:
         logger.error(f"Failed direct target item lookup query on ID [{image_id}]: {str(e)}")
     return None
+
+def build_about_page():
+    """Return the lightweight, public About Verstantly page."""
+    canonical_url = f"{PUBLIC_BASE_URL}/about"
+    description = (
+        "Learn about Verstantly—Verse. Instantly. Constantly.—and our mission "
+        "to make Bible verse images accessible in English, Telugu, Tamil and Hindi."
+    )
+    social_image = f"{S3_DIRECT_URL}/home-preview.jpg?wspreview=1"
+
+    return f'''<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>About Verstantly | Multilingual Bible Verse Images</title>
+  <meta name="description" content="{escape(description, quote=True)}">
+  <meta name="robots" content="index,follow,max-image-preview:large">
+  <link rel="canonical" href="{canonical_url}">
+  <meta property="og:title" content="About Verstantly">
+  <meta property="og:description" content="{escape(description, quote=True)}">
+  <meta property="og:image" content="{escape(social_image, quote=True)}">
+  <meta property="og:url" content="{canonical_url}">
+  <meta property="og:type" content="website">
+  <link rel="icon" href="/favicon.ico">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;700&display=swap" rel="stylesheet">
+  <style>
+    * {{ box-sizing: border-box; }}
+    body {{ margin: 0; min-height: 100vh; background: #0f172a; color: #e2e8f0; font-family: "Inter", sans-serif; }}
+    .about-shell {{ width: 100%; max-width: 760px; margin: 0 auto; padding: 44px 22px 60px; }}
+    .about-home {{ display: inline-flex; align-items: center; gap: 8px; color: #94a3b8; text-decoration: none; font-size: 14px; margin-bottom: 34px; }}
+    .about-home:hover {{ color: #38bdf8; }}
+    .about-logo-wrap {{ width: 86px; height: 86px; margin: 0 auto 24px; padding: 4px; border-radius: 50%; background: linear-gradient(135deg, #38bdf8, #1e40af); box-shadow: 0 8px 24px rgba(0,0,0,.3); }}
+    .about-logo {{ width: 100%; height: 100%; display: flex; align-items: center; justify-content: center; border-radius: 50%; background: #0f172a; }}
+    .about-logo img {{ width: 54px; height: 54px; object-fit: contain; }}
+    .about-card {{ padding: 38px; border: 1px solid rgba(255,255,255,.1); border-radius: 20px; background: rgba(255,255,255,.04); box-shadow: 0 18px 45px rgba(0,0,0,.2); }}
+    h1 {{ margin: 0 0 12px; color: #f8fafc; text-align: center; font-size: clamp(30px, 6vw, 42px); letter-spacing: -.03em; }}
+    .tagline {{ margin: 0 0 32px; color: #38bdf8; text-align: center; font-weight: 700; letter-spacing: .08em; }}
+    p {{ margin: 0 0 20px; color: #cbd5e1; font-size: 16px; line-height: 1.8; }}
+    p:last-child {{ margin-bottom: 0; }}
+    .mission {{ margin-top: 30px; padding: 20px; border-left: 3px solid #38bdf8; border-radius: 0 12px 12px 0; background: rgba(56,189,248,.07); }}
+    .mission strong {{ color: #f8fafc; }}
+    .about-footer {{ margin-top: 28px; text-align: center; color: #64748b; font-size: 13px; }}
+    .about-footer a {{ color: #94a3b8; text-decoration: none; }}
+    .about-footer a:hover {{ color: #38bdf8; }}
+    @media (max-width: 600px) {{
+      .about-shell {{ padding: 28px 16px 40px; }}
+      .about-card {{ padding: 28px 22px; }}
+      p {{ font-size: 15px; }}
+    }}
+  </style>
+</head>
+<body>
+  <main class="about-shell">
+    <a class="about-home" href="/" aria-label="Return to Verstantly home">&#8592; Back to verses</a>
+    <div class="about-logo-wrap"><div class="about-logo"><img src="/logo.png" alt="Verstantly logo"></div></div>
+    <article class="about-card">
+      <h1>About Verstantly</h1>
+      <p class="tagline">Verse. Instantly. Constantly.</p>
+      <p>Verstantly brings Scripture closer—one verse at a time.</p>
+      <p>We created Verstantly as a simple and inspiring way to discover, view and share Bible verse images in multiple languages.</p>
+      <p>Verstantly currently offers Scripture images in English, Telugu, Tamil and Hindi. Each verse is designed to make God’s Word easy to access, meaningful to reflect upon and convenient to share with family and friends. Our multilingual collection helps people discover verses in their native language, native script and familiar transliteration.</p>
+      <p>Whether you are looking for encouragement, hope, peace, wisdom or a verse to share with someone you care about, Verstantly helps you connect with Scripture wherever you are.</p>
+      <p class="mission"><strong>Our mission is simple:</strong> to make Bible verses more accessible across languages and help God’s Word reach people instantly and constantly.</p>
+    </article>
+    <footer class="about-footer"><a href="/">Verstantly</a> &middot; Verse. Instantly. Constantly.</footer>
+  </main>
+</body>
+</html>'''
 
 def lambda_handler(event, context):
     global image_cache
@@ -294,6 +377,26 @@ def lambda_handler(event, context):
                     'body': json.dumps({'success': False, 'error': str(metric_err)})
                 }
 
+        if clean_path == "robots.txt":
+            return {
+                'statusCode': 200,
+                'headers': {
+                    'Content-Type': 'text/plain; charset=UTF-8',
+                    'Cache-Control': 'public, max-age=3600'
+                },
+                'body': 'User-agent: *\nAllow: /\nSitemap: https://verstantly.com/sitemap.xml\n'
+            }
+
+        if clean_path == "about":
+            return {
+                'statusCode': 200,
+                'headers': {
+                    'Content-Type': 'text/html; charset=UTF-8',
+                    'Cache-Control': 'public, max-age=3600'
+                },
+                'body': build_about_page()
+            }
+
         if clean_path == "telugu":
             lang_mode = "telugu"
             folder_prefix = "telugu/"
@@ -307,9 +410,7 @@ def lambda_handler(event, context):
             lang_mode = "english"
             folder_prefix = "english/"
 
-        headers = ensure_dict(event.get('headers'))
-        domain = headers.get('host', 'verstantly.com') 
-        base_url = f"https://{domain}"
+        base_url = PUBLIC_BASE_URL
 
         if clean_path in ["favicon.ico", "apple-touch-icon.png", "logo.png", "home-preview.jpg", "home-preview-telugu.jpg", "home-preview-tamil.jpg", "home-preview-hindi.jpg"]:
             return {'statusCode': 302, 'headers': {'Location': f"{S3_DIRECT_URL}/{clean_path}"}, 'body': ''}
@@ -355,30 +456,69 @@ def lambda_handler(event, context):
                 display_title = target_asset['reference'] if (target_asset.get('reference') and target_asset['reference'].strip()) else "Verse.Instantly.Constantly"
                 display_desc = target_asset['verse_text'] if (target_asset.get('verse_text') and target_asset['verse_text'].strip()) else "Daily scriptural meditation and verses delivered instantly."
             else:
-                display_title = "Verse.Instantly.Constantly"
-                display_desc = "Daily scriptural meditation and verses delivered instantly. Stay spiritually refreshed and connected to the Word, constantly."
-                social_img_path = f"{S3_DIRECT_URL}/home-preview.jpg?wspreview=1"
+                return {
+                    'statusCode': 404,
+                    'headers': {
+                        'Content-Type': 'text/html; charset=UTF-8',
+                        'X-Robots-Tag': 'noindex'
+                    },
+                    'body': '<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><meta name="robots" content="noindex"><title>Verse Not Found | Verstantly</title></head><body><h1>Verse not found</h1><p>The requested verse image could not be found.</p></body></html>'
+                }
 
+        language_codes = {'english': 'en', 'telugu': 'te', 'tamil': 'ta', 'hindi': 'hi'}
+        page_language = language_codes.get(lang_mode, 'en')
         h = f'<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">'
-        
-        if target_asset:
-            safe_name = target_asset.get('reference', 'Verse').replace('"', '&quot;')
-            safe_caption = target_asset.get('verse_text', 'Daily verse').replace('"', '&quot;')
-            h += f'<script type="application/ld+json">'
-            h += f'{{"@context":"https://schema.org/","@type":"ImageObject","contentUrl":"{CLOUDFRONT_BASE}/{target_asset["s3_key"]}","name":"{safe_name}","caption":"{safe_caption}"}}'
-            h += f'</script>'
 
         path_suffix = f"{clean_path}" if clean_path in ["telugu", "tamil", "hindi"] else ""
-        h += f'<meta property="og:title" content="{display_title}">'
-        h += f'<meta property="og:image" content="{social_img_path}">'
+        canonical_path = f"/{path_suffix}" if path_suffix else "/"
+        canonical_url = f"{base_url}{canonical_path}"
+        if target_asset:
+            canonical_url += f"?id={quote(url_id, safe='')}"
+
+        if target_asset:
+            structured_keywords = [
+                value for value in [
+                    target_asset.get('reference', ''),
+                    target_asset.get('native_reference', ''),
+                    target_asset.get('native_reference_transliteration', ''),
+                    target_asset.get('native_text', ''),
+                    target_asset.get('transliteration', '')
+                ] if value and value.strip()
+            ]
+            structured_data = {
+                '@context': 'https://schema.org/',
+                '@type': 'ImageObject',
+                'contentUrl': f'{CLOUDFRONT_BASE}/{target_asset["s3_key"]}',
+                'url': canonical_url,
+                'name': target_asset.get('reference', 'Verse'),
+                'caption': target_asset.get('verse_text', 'Daily verse'),
+                'inLanguage': page_language
+            }
+            if structured_keywords:
+                structured_data['keywords'] = structured_keywords
+            safe_structured_data = json.dumps(structured_data, ensure_ascii=True).replace('</', '<\\/')
+            h += f'<script type="application/ld+json">{safe_structured_data}</script>'
+
+        seo_title = f"{display_title} Bible Verse Image | Verstantly" if target_asset else display_title
+        safe_display_title = escape(display_title, quote=True)
+        safe_seo_title = escape(seo_title, quote=True)
+        safe_display_desc = escape(display_desc, quote=True)
+        safe_social_img_path = escape(social_img_path, quote=True)
+        safe_canonical_url = escape(canonical_url, quote=True)
+
+        h += f'<link rel="canonical" href="{safe_canonical_url}">'
+        h += '<meta name="robots" content="index,follow,max-image-preview:large">'
+        h += f'<meta name="description" content="{safe_display_desc}">'
+        h += f'<meta property="og:title" content="{safe_display_title}">'
+        h += f'<meta property="og:image" content="{safe_social_img_path}">'
         h += f'<meta property="og:image:type" content="image/jpeg">'
         h += f'<meta property="og:image:width" content="1200">'
         h += f'<meta property="og:image:height" content="630">'
-        h += f'<meta property="og:url" content="{base_url}/{path_suffix}?id={url_id if url_id else ""}">'
+        h += f'<meta property="og:url" content="{safe_canonical_url}">'
         h += f'<meta property="og:type" content="website">'
-        h += f'<meta property="og:description" content="{display_desc}">'
+        h += f'<meta property="og:description" content="{safe_display_desc}">'
         
-        h += f'<title>{display_title}</title><link rel="icon" href="/favicon.ico">'
+        h += f'<title>{safe_seo_title}</title><link rel="icon" href="/favicon.ico">'
         h += '<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;700&family=Noto+Sans+Devanagari:wght@400;700&family=Noto+Sans+Telugu:wght@400;700&family=Noto+Sans+Tamil:wght@400;700&display=swap" rel="stylesheet">'
         
         # CSS STYLING
@@ -402,6 +542,13 @@ def lambda_handler(event, context):
         h += '.search-input { width: 100%; padding: 12px 18px 12px 42px; border-radius: 24px; border: 1px solid rgba(255,255,255,0.15); background: rgba(255,255,255,0.06); color: white; outline: none; font-size: 14px; transition: all 0.3s ease; backdrop-filter: blur(8px); }'
         h += '.search-input:focus { border-color: #38bdf8; background: rgba(255,255,255,0.1); box-shadow: 0 0 15px rgba(56,189,248,0.2); }'
         h += '.search-icon { position: absolute; left: 14px; top: 50%; transform: translateY(-50%); color: #94a3b8; pointer-events: none; }'
+        h += '.verse-language-details { width: calc(100% - 40px); max-width: 895px; box-sizing: border-box; margin: -14px auto 28px auto; padding: 14px 18px; border-radius: 12px; background: rgba(255,255,255,0.04); border: 1px solid rgba(255,255,255,0.08); color: #cbd5e1; text-align: center; }'
+        h += '.verse-language-details p { margin: 4px 0; line-height: 1.6; }'
+        h += '.verse-detail-reference { margin: 0 0 8px 0; font-size: 18px; color: #f8fafc; }'
+        h += '.verse-detail-description { font-size: 14px; color: #cbd5e1; }'
+        h += '.verse-native-reference { font-size: 14px; font-weight: 700; color: #38bdf8; }'
+        h += '.verse-native-text { font-size: 15px; }'
+        h += '.verse-transliteration { font-size: 12px; color: #94a3b8; }'
         
         if lang_mode == "telugu":
             h += '.banner-text { font-family: "Noto Sans Telugu", "Inter", sans-serif; font-size: 20px; font-weight: 400; line-height: 1.8; color: #e2e8f0; max-width: 650px; margin: 0 0 16px 0; letter-spacing: 0.02em; }'
@@ -421,6 +568,9 @@ def lambda_handler(event, context):
         h += '.grid-item { position: relative; width: 100%; padding-top: 100%; background: rgba(255,255,255,0.02); border-radius: 12px; overflow: hidden; cursor: pointer; border: 1px solid rgba(255,255,255,0.05); transition: transform 0.25s cubic-bezier(0.4, 0, 0.2, 1), border-color 0.25s; }'
         h += '.grid-item:hover { transform: scale(1.02); border-color: rgba(56, 189, 248, 0.5); box-shadow: 0 12px 24px rgba(0,0,0,0.3); }'
         h += '.grid-item img { position: absolute; top: 0; left: 0; width: 100%; height: 100%; object-fit: cover; -webkit-user-drag: none; -webkit-touch-callout: none; }'
+        h += '.about-nav { margin-top: 4px; font-size: 13px; }'
+        h += '.about-nav a { color: #94a3b8; text-decoration: none; transition: color .2s; }'
+        h += '.about-nav a:hover { color: #38bdf8; }'
         
         # LIGHTBOX & TRANSLATION PILLS STYLING
         h += '.lightbox { display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(15, 23, 42, 0.95); backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px); z-index: 200; align-items: center; justify-content: center; opacity: 0; transition: opacity 0.3s ease; touch-action: none; }'
@@ -488,9 +638,26 @@ def lambda_handler(event, context):
         h += '    <span class="search-icon"><svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/></svg></span>'
         h += f'    <input type="text" id="searchInput" class="search-input" value="{search_query}" placeholder="Search verses or references..." onkeypress="handleSearch(event)">'
         h += '  </div>'
+        h += '  <nav class="about-nav" aria-label="Site information"><a href="/about">About Verstantly</a></nav>'
         
         h += '</div>'
         h += '<div class="divider"></div>'
+
+        if target_asset:
+            h += '<section class="verse-language-details" aria-label="Bible verse details">'
+            if target_asset.get('reference'):
+                h += f'<h1 class="verse-detail-reference">{escape(target_asset["reference"])}</h1>'
+            if target_asset.get('verse_text'):
+                h += f'<p class="verse-detail-description">{escape(target_asset["verse_text"])}</p>'
+            if target_asset.get('native_reference'):
+                h += f'<p class="verse-native-reference" lang="{page_language}">{escape(target_asset["native_reference"])}</p>'
+            if target_asset.get('native_reference_transliteration'):
+                h += f'<p class="verse-transliteration">{escape(target_asset["native_reference_transliteration"])}</p>'
+            if target_asset.get('native_text'):
+                h += f'<p class="verse-native-text" lang="{page_language}">{escape(target_asset["native_text"])}</p>'
+            if target_asset.get('transliteration'):
+                h += f'<p class="verse-transliteration">{escape(target_asset["transliteration"])}</p>'
+            h += '</section>'
         
         h += '<div class="gallery-grid">'
         client_js_array = []
@@ -507,9 +674,13 @@ def lambda_handler(event, context):
                 'translations': translations
             })
             
-            h += f'<div class="grid-item" id="tile-{img["id"]}" onclick="openLightbox({idx})">'
-            h += f'<img src="{full_cf_url}" loading="lazy" alt="Verse Asset">'
-            h += '</div>'
+            image_page_path = f"/{path_suffix}" if path_suffix else "/"
+            image_page_url = f'{image_page_path}?id={quote(img["id"], safe="")}'
+            h += f'<a href="{escape(image_page_url, quote=True)}" class="grid-item" id="tile-{escape(img["id"], quote=True)}" onclick="event.preventDefault(); openLightbox({idx})">'
+            alt_parts = [img.get('reference', ''), img.get('native_text', '')]
+            alt_text = ' - '.join(part.strip() for part in alt_parts if part and part.strip()) or 'Verse Asset'
+            h += f'<img src="{full_cf_url}" loading="lazy" alt="{escape(alt_text, quote=True)}">'
+            h += '</a>'
         h += '</div>'
         
         h += '<div id="lightbox" class="lightbox" onclick="closeLightbox()">'
