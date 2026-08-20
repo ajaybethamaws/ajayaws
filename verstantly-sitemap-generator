@@ -1,0 +1,94 @@
+import json
+import boto3
+import os
+import logging
+
+logger = logging.getLogger()
+logger.setLevel(logging.INFO)
+
+TABLE_NAME = os.environ.get('TABLE_NAME', 'verstantly-verse-images')
+REGION = os.environ.get('REGION', 'us-east-1')
+CLOUDFRONT_DOMAIN = os.environ.get('CLOUDFRONT_DOMAIN', 'd15si3zl564vcw.cloudfront.net')
+CLOUDFRONT_BASE = f"https://{CLOUDFRONT_DOMAIN}"
+PUBLIC_BASE_URL = os.environ.get('PUBLIC_BASE_URL', 'https://verstantly.com').rstrip('/')
+
+dynamo_client = boto3.client('dynamodb', region_name=REGION)
+
+def lambda_handler(event, context):
+    try:
+        # Always publish the verified public domain, not the Lambda origin host.
+        base_url = PUBLIC_BASE_URL
+
+        # Bulk acquisition from DynamoDB
+        paginator = dynamo_client.get_paginator('scan')
+        db_items = []
+        for page in paginator.paginate(TableName=TABLE_NAME):
+            db_items.extend(page.get('Items', []))
+        
+        xml_output = ['<?xml version="1.0" encoding="UTF-8"?>']
+        xml_output.append('<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9"')
+        xml_output.append('        xmlns:image="http://www.google.com/schemas/sitemap-image/1.1">')
+        
+        # 1. Add language homepages
+        for lang_path in ["", "telugu", "tamil", "hindi"]:
+            home_url = f"{base_url}/{lang_path}" if lang_path else f"{base_url}/"
+            xml_output.append('  <url>')
+            xml_output.append(f'    <loc>{home_url}</loc>')
+            xml_output.append('    <changefreq>daily</changefreq>')
+            xml_output.append('    <priority>1.0</priority>')
+            xml_output.append('  </url>')
+
+        # Add the public About page.
+        xml_output.append('  <url>')
+        xml_output.append(f'    <loc>{base_url}/about</loc>')
+        xml_output.append('    <changefreq>monthly</changefreq>')
+        xml_output.append('    <priority>0.6</priority>')
+        xml_output.append('  </url>')
+
+        # 2. Add verse deep-links and image payloads
+        for item in db_items:
+            image_id = item.get('image_id', {}).get('S', '')
+            s3_key = item.get('s3_key', {}).get('S', '')
+            reference = item.get('reference', {}).get('S', 'Verse')
+            verse_text = item.get('verse_text', {}).get('S', 'Daily verse')
+            
+            if not image_id or not s3_key:
+                continue
+                
+            s3_lower = s3_key.lower()
+            if s3_lower.startswith('telugu/'):
+                route_prefix = "telugu"
+            elif s3_lower.startswith('tamil/'):
+                route_prefix = "tamil"
+            elif s3_lower.startswith('hindi/'):
+                route_prefix = "hindi"
+            else:
+                route_prefix = ""
+                
+            page_url = f"{base_url}/{route_prefix}?id={image_id}" if route_prefix else f"{base_url}/?id={image_id}"
+            img_url = f"{CLOUDFRONT_BASE}/{s3_key}"
+            
+            safe_ref = reference.replace('&', '&amp;').replace('"', '&quot;').replace('<', '&lt;').replace('>', '&gt;')
+            safe_desc = verse_text.replace('&', '&amp;').replace('"', '&quot;').replace('<', '&lt;').replace('>', '&gt;')
+
+            xml_output.append('  <url>')
+            xml_output.append(f'    <loc>{page_url}</loc>')
+            xml_output.append('    <image:image>')
+            xml_output.append(f'      <image:loc>{img_url}</image:loc>')
+            xml_output.append(f'      <image:title>{safe_ref}</image:title>')
+            xml_output.append(f'      <image:caption>{safe_desc}</image:caption>')
+            xml_output.append('    </image:image>')
+            xml_output.append('    <changefreq>weekly</changefreq>')
+            xml_output.append('    <priority>0.8</priority>')
+            xml_output.append('  </url>')
+
+        xml_output.append('</urlset>')
+        
+        return {
+            'statusCode': 200,
+            'headers': {'Content-Type': 'application/xml; charset=UTF-8'},
+            'body': '\n'.join(xml_output)
+        }
+    except Exception as e:
+        logger.error(f"Sitemap error: {str(e)}")
+        return {'statusCode': 500, 'body': 'Sitemap Error'}
