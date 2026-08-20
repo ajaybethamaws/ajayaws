@@ -233,6 +233,17 @@
                         <span id="translation-needed-count-badge" class="ml-1 bg-slate-100 text-slate-600 px-2 py-0.5 rounded-md font-mono text-[11px]">0</span>
                       </button>
 
+                      <button 
+                        type="button" 
+                        id="filter-native-reference-needed-btn" 
+                        onclick="toggleNativeReferenceNeededFilter()" 
+                        class="shrink-0 bg-white hover:bg-slate-50 border border-slate-200 text-slate-700 font-bold px-4 py-2.5 rounded-xl text-xs shadow-sm transition-all cursor-pointer flex items-center gap-2"
+                    >
+                        <span id="native-reference-needed-indicator" class="w-2 h-2 rounded-full bg-slate-300"></span>
+                        <span>Native Reference Needed</span>
+                        <span id="native-reference-needed-count-badge" class="ml-1 bg-slate-100 text-slate-600 px-2 py-0.5 rounded-md font-mono text-[11px]">0</span>
+                      </button>
+
                       <div class="shrink-0 flex items-center bg-white border border-slate-200 rounded-xl px-3 py-1 shadow-sm focus-within:ring-2 focus-within:ring-sky-100 focus-within:border-sky-500 transition-all">
                         <label for="activity-filter-select" class="text-xs font-bold text-slate-400 uppercase tracking-wider mr-2">Activity:</label>
                         <select id="activity-filter-select" onchange="executeDatabaseSearchFilter()" class="bg-transparent text-xs font-bold text-slate-700 outline-none py-1.5 cursor-pointer">
@@ -249,6 +260,7 @@
                             <option value="oldest">Oldest First</option>
                             <option value="views-desc">Most Views</option>
                             <option value="views-asc">Least Views</option>
+                            <option value="last-viewed">Last Viewed</option>
                         </select>
                       </div>
                     </div>
@@ -365,6 +377,7 @@
             isUploading: false,
             showOnlyMissingReference: false,
             showOnlyTranslationNeeded: false,
+            showOnlyNativeReferenceNeeded: false,
             activityFilter: 'all',
             analyticsPeriod: 'daily',
             analytics: null
@@ -512,6 +525,26 @@
             executeDatabaseSearchFilter();
         };
 
+        window.toggleNativeReferenceNeededFilter = function() {
+            appState.showOnlyNativeReferenceNeeded = !appState.showOnlyNativeReferenceNeeded;
+
+            const btn = document.getElementById('filter-native-reference-needed-btn');
+            const indicator = document.getElementById('native-reference-needed-indicator');
+            const badge = document.getElementById('native-reference-needed-count-badge');
+
+            if (appState.showOnlyNativeReferenceNeeded) {
+                btn.className = "shrink-0 bg-emerald-500 hover:bg-emerald-600 border border-emerald-600 text-white font-bold px-4 py-2.5 rounded-xl text-xs shadow-sm transition-all cursor-pointer flex items-center gap-2";
+                indicator.className = "w-2 h-2 rounded-full bg-white animate-pulse";
+                badge.className = "ml-1 bg-emerald-600 text-white px-2 py-0.5 rounded-md font-mono text-[11px]";
+            } else {
+                btn.className = "shrink-0 bg-white hover:bg-slate-50 border border-slate-200 text-slate-700 font-bold px-4 py-2.5 rounded-xl text-xs shadow-sm transition-all cursor-pointer flex items-center gap-2";
+                indicator.className = "w-2 h-2 rounded-full bg-slate-300";
+                badge.className = "ml-1 bg-slate-100 text-slate-600 px-2 py-0.5 rounded-md font-mono text-[11px]";
+            }
+
+            executeDatabaseSearchFilter();
+        };
+
         function isEnglishVerse(img) {
             const lowerKey = (img.s3_key || '').toLowerCase();
             return lowerKey.startsWith('english/') || (!lowerKey.startsWith('telugu/') && !lowerKey.startsWith('tamil/') && !lowerKey.startsWith('hindi/'));
@@ -530,6 +563,15 @@
             }).length;
             const badge = document.getElementById('translation-needed-count-badge');
             if (badge) badge.innerText = translationNeededCount;
+        }
+
+        function updateNativeReferenceNeededCount() {
+            const nativeReferenceNeededCount = appState.images.filter(img => {
+                if (isEnglishVerse(img)) return false;
+                return !img.native_reference || img.native_reference.trim().length === 0;
+            }).length;
+            const badge = document.getElementById('native-reference-needed-count-badge');
+            if (badge) badge.innerText = nativeReferenceNeededCount;
         }
 
         function updateAggregatedMetrics() {
@@ -815,6 +857,7 @@
                 calculateLanguageMetrics();
                 updateMissingReferenceCount();
                 updateTranslationNeededCount();
+                updateNativeReferenceNeededCount();
                 updateAggregatedMetrics();
                 executeDatabaseSearchFilter();
             } catch (err) {
@@ -879,23 +922,42 @@
                     if (hasVersion) return false;
                 }
 
+                if (appState.showOnlyNativeReferenceNeeded) {
+                    if (isEnglishVerse(img)) return false;
+                    const hasNativeReference = img.native_reference && img.native_reference.trim().length > 0;
+                    if (hasNativeReference) return false;
+                }
+
                 if (!query) return true;
                 const ref = (img.reference || '').toLowerCase();
+                const nativeReference = (img.native_reference || '').toLowerCase();
+                const nativeReferenceTransliteration = (img.native_reference_transliteration || '').toLowerCase();
                 const version = (img.bible_version || '').toLowerCase();
                 const verse = (img.verse_text || '').toLowerCase();
+                const nativeText = (img.native_text || '').toLowerCase();
+                const transliteration = (img.transliteration || '').toLowerCase();
                 const id = (img.image_id || img.id || '').toLowerCase();
                 const key = (img.s3_key || '').toLowerCase();
-                return ref.includes(query) || version.includes(query) || verse.includes(query) || id.includes(query) || key.includes(query);
+                return ref.includes(query) || nativeReference.includes(query) || nativeReferenceTransliteration.includes(query) || version.includes(query) || verse.includes(query) || nativeText.includes(query) || transliteration.includes(query) || id.includes(query) || key.includes(query);
             });
 
             if (sortMode === 'newest') results = sortLikeLambda(results, true);
             else if (sortMode === 'oldest') results = sortLikeLambda(results, false);
             else if (sortMode === 'views-desc') results.sort((a, b) => (Number(b.views) || 0) - (Number(a.views) || 0));
             else if (sortMode === 'views-asc') results.sort((a, b) => (Number(a.views) || 0) - (Number(b.views) || 0));
+            else if (sortMode === 'last-viewed') {
+                const lastViewedByImage = appState.analytics?.image_last_viewed || {};
+                results.sort((a, b) => {
+                    const aTimestamp = Date.parse(lastViewedByImage[a.image_id || a.id || '']) || 0;
+                    const bTimestamp = Date.parse(lastViewedByImage[b.image_id || b.id || '']) || 0;
+                    return bTimestamp - aTimestamp;
+                });
+            }
 
             appState.filteredImages = results;
             updateMissingReferenceCount();
             updateTranslationNeededCount();
+            updateNativeReferenceNeededCount();
 
             const countBadge = document.getElementById('search-count-badge');
             if (countBadge) countBadge.innerText = appState.filteredImages.length;
@@ -1089,12 +1151,43 @@
                             </div>
                         </div>
 
+                        <div class="grid grid-cols-1 gap-2">
+                            <div>
+                                <div class="flex items-center justify-between gap-2 mb-1">
+                                    <label class="block text-[10px] font-extrabold text-slate-400 uppercase tracking-wider">Native Verse Reference</label>
+                                    <button type="button" id="generate-reference-transliteration-btn" onclick="generateTransliterationSuggestion('reference')" class="text-[10px] font-bold text-indigo-600 hover:text-indigo-700 bg-indigo-50 hover:bg-indigo-100 border border-indigo-100 px-2.5 py-1 rounded-lg transition-all cursor-pointer">
+                                        Generate Reference
+                                    </button>
+                                </div>
+                                <input type="text" id="edit-native-reference" value="${img.native_reference || ''}" placeholder="Optional native reference" class="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-xs font-bold text-slate-900 focus:bg-white focus:ring-2 focus:ring-sky-500 focus:outline-none">
+                            </div>
+                            <div>
+                                <label class="block text-[10px] font-extrabold text-slate-400 uppercase tracking-wider mb-1">Native Reference Transliteration</label>
+                                <input type="text" id="edit-native-reference-transliteration" value="${img.native_reference_transliteration || ''}" placeholder="Example: Keerthanalu 23:1" class="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-xs text-slate-800 focus:bg-white focus:ring-2 focus:ring-sky-500 focus:outline-none">
+                            </div>
+                        </div>
+
                         <div>
                             <div class="flex items-center justify-between mb-1">
                                 <label class="block text-[10px] font-extrabold text-slate-400 uppercase tracking-wider">Full Verse Text</label>
                                 <button type="button" onclick="fetchVerseTextFromDB('edit')" class="text-[10px] font-bold text-sky-600 hover:text-sky-700 cursor-pointer">Fetch Text &rarr;</button>
                             </div>
                             <textarea id="edit-verse" rows="5" class="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-xs text-slate-800 leading-relaxed focus:bg-white focus:ring-2 focus:ring-sky-500 focus:outline-none">${img.verse_text || ''}</textarea>
+                        </div>
+
+                        <div>
+                            <div class="flex items-center justify-between gap-2 mb-1">
+                                <label class="block text-[10px] font-extrabold text-slate-400 uppercase tracking-wider">Native Verse Text</label>
+                                <button type="button" id="generate-verse-transliteration-btn" onclick="generateTransliterationSuggestion('verse')" class="text-[10px] font-bold text-indigo-600 hover:text-indigo-700 bg-indigo-50 hover:bg-indigo-100 border border-indigo-100 px-2.5 py-1 rounded-lg transition-all cursor-pointer">
+                                    Generate Verse
+                                </button>
+                            </div>
+                            <textarea id="edit-native-text" rows="4" placeholder="Optional native-language verse text" class="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-xs text-slate-800 leading-relaxed focus:bg-white focus:ring-2 focus:ring-sky-500 focus:outline-none">${img.native_text || ''}</textarea>
+                        </div>
+
+                        <div>
+                            <label class="block text-[10px] font-extrabold text-slate-400 uppercase tracking-wider mb-1">Transliteration</label>
+                            <textarea id="edit-transliteration" rows="3" placeholder="Optional native text written in English letters" class="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-xs text-slate-800 leading-relaxed focus:bg-white focus:ring-2 focus:ring-sky-500 focus:outline-none">${img.transliteration || ''}</textarea>
                         </div>
 
                         <div class="pt-2 space-y-2">
@@ -1117,6 +1210,72 @@
             referenceInput.addEventListener('input', autoPopulateFilename);
         }
 
+        async function generateTransliterationSuggestion(mode) {
+            if (!appState.selectedImage) return;
+
+            if (mode !== 'reference' && mode !== 'verse') return;
+
+            const lowerKey = (appState.selectedImage.s3_key || '').toLowerCase();
+            let language = '';
+            if (lowerKey.startsWith('telugu/')) language = 'telugu';
+            else if (lowerKey.startsWith('tamil/')) language = 'tamil';
+            else if (lowerKey.startsWith('hindi/')) language = 'hindi';
+
+            if (!language) {
+                alert('Automatic transliteration is available for Telugu, Tamil, and Hindi images.');
+                return;
+            }
+
+            const nativeReferenceInput = document.getElementById('edit-native-reference');
+            const nativeTextInput = document.getElementById('edit-native-text');
+            const referenceTransliterationInput = document.getElementById('edit-native-reference-transliteration');
+            const transliterationInput = document.getElementById('edit-transliteration');
+            const isReference = mode === 'reference';
+            const sourceValue = isReference ? nativeReferenceInput.value.trim() : nativeTextInput.value.trim();
+            const targetInput = isReference ? referenceTransliterationInput : transliterationInput;
+            const generateBtn = document.getElementById(isReference ? 'generate-reference-transliteration-btn' : 'generate-verse-transliteration-btn');
+            const buttonLabel = isReference ? 'Generate Reference' : 'Generate Verse';
+
+            if (!sourceValue) {
+                alert(isReference ? 'Enter a native verse reference first.' : 'Enter native verse text first.');
+                return;
+            }
+
+            if (targetInput.value.trim() &&
+                !window.confirm(isReference ? 'Replace the existing reference transliteration?' : 'Replace the existing verse transliteration?')) {
+                return;
+            }
+
+            generateBtn.disabled = true;
+            generateBtn.innerText = 'Generating...';
+
+            try {
+                const response = await fetch(`${API_BASE_URL}/transliterate`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        language,
+                        native_reference: isReference ? sourceValue : '',
+                        native_text: isReference ? '' : sourceValue
+                    })
+                });
+                const result = await response.json().catch(() => ({}));
+                if (!response.ok || result.success === false) {
+                    throw new Error(result.error || result.message || 'Unable to generate transliteration.');
+                }
+
+                const suggestion = isReference ? result.native_reference_transliteration : result.transliteration;
+                if (typeof suggestion === 'string') {
+                    targetInput.value = suggestion;
+                }
+            } catch (error) {
+                alert(error.message || 'Unable to generate transliteration.');
+            } finally {
+                generateBtn.disabled = false;
+                generateBtn.innerText = buttonLabel;
+            }
+        }
+
         async function handleSaveImage(event) {
             event.preventDefault();
             if (!appState.selectedImage || appState.isSaving) return;
@@ -1124,8 +1283,12 @@
             const saveBtn = document.getElementById('save-btn');
             const filenameInput = document.getElementById('edit-filename');
             const referenceInput = document.getElementById('edit-reference');
+            const nativeReferenceInput = document.getElementById('edit-native-reference');
+            const nativeReferenceTransliterationInput = document.getElementById('edit-native-reference-transliteration');
             const versionInput = document.getElementById('edit-version');
             const verseInput = document.getElementById('edit-verse');
+            const nativeTextInput = document.getElementById('edit-native-text');
+            const transliterationInput = document.getElementById('edit-transliteration');
 
             appState.isSaving = true;
             saveBtn.innerText = 'Saving...';
@@ -1138,8 +1301,12 @@
                 s3_key: appState.selectedImage.s3_key,
                 requested_filename: filenameInput.value.trim(),
                 reference: referenceInput.value.trim(),
+                native_reference: nativeReferenceInput.value.trim(),
+                native_reference_transliteration: nativeReferenceTransliterationInput.value.trim(),
                 bible_version: versionInput.value.trim(),
-                verse_text: verseInput.value.trim()
+                verse_text: verseInput.value.trim(),
+                native_text: nativeTextInput.value.trim(),
+                transliteration: transliterationInput.value.trim()
             };
 
             try {
@@ -1155,16 +1322,24 @@
                     const updatedData = result.data || {};
 
                     appState.selectedImage.reference = payload.reference;
+                    appState.selectedImage.native_reference = payload.native_reference;
+                    appState.selectedImage.native_reference_transliteration = payload.native_reference_transliteration;
                     appState.selectedImage.bible_version = payload.bible_version;
                     appState.selectedImage.verse_text = payload.verse_text;
+                    appState.selectedImage.native_text = payload.native_text;
+                    appState.selectedImage.transliteration = payload.transliteration;
                     appState.selectedImage.current_filename = updatedData.current_filename || payload.requested_filename;
                     appState.selectedImage.s3_key = updatedData.s3_key || appState.selectedImage.s3_key;
                     
                     const idx = appState.images.findIndex(i => (i.image_id || i.id) === imgId);
                     if (idx !== -1) {
                         appState.images[idx].reference = payload.reference;
+                        appState.images[idx].native_reference = payload.native_reference;
+                        appState.images[idx].native_reference_transliteration = payload.native_reference_transliteration;
                         appState.images[idx].bible_version = payload.bible_version;
                         appState.images[idx].verse_text = payload.verse_text;
+                        appState.images[idx].native_text = payload.native_text;
+                        appState.images[idx].transliteration = payload.transliteration;
                         appState.images[idx].current_filename = appState.selectedImage.current_filename;
                         appState.images[idx].s3_key = appState.selectedImage.s3_key;
                     }
